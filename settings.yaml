@@ -6,7 +6,7 @@ old_song_url: "https://bemaniwiki.com/?beatmania+IIDX+33+Sparkle+Shower/%B5%EC%B
 output_db_path: "song_master.sqlite"
 
 github:
-  owner: "YOUR_OWNER"
-  repo: "YOUR_REPO"
+  owner: "tts1374"
+  repo: "song_master_builder"
   upload_to_release: true
   asset_name: "song_master.sqlite"
