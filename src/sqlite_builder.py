@@ -287,7 +287,7 @@ def build_or_update_sqlite(
         # actbl[tag][0] はフラグ領域
         # bit0: AC収録
         # bit1: INFINITAS収録
-        flags = actbl[tag][0]
+        flags = int(actbl[tag][0])
         is_ac_active = 1 if (flags & 0x01) else 0
         is_inf_active = 1 if (flags & 0x02) else 0
 
