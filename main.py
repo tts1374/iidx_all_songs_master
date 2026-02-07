@@ -1,144 +1,94 @@
-"""
-曲マスタDB生成のエントリーポイント。
-
-処理概要:
-- settings.yaml を読み込み設定を取得
-- 新曲/旧曲ページをスクレイピングし、対象tableを抽出して曲情報をパース
-- 新旧を結合し、music_key重複を検知（重複があれば失敗）
-- SQLiteへ反映（全件論理削除 → upsert）
-- active件数の増減率チェック（90%未満なら失敗）
-- GitHub Releases の latest に DB を asset としてアップロード（任意）
-- Discordへ結果通知（任意、環境変数指定）
-
-環境変数:
-- DISCORD_WEBHOOK_URL: Discord通知先Webhook URL（未設定なら通知しない）
-- GITHUB_TOKEN: GitHub Releases操作用トークン（upload_to_release有効時に必須）
-"""
-
-from __future__ import annotations
-
 import os
+import sys
 import traceback
+from datetime import datetime, timezone
 
-from src.config import load_settings
-from src.db import (
-    apply_song,
-    build_music_key,
-    connect_db,
-    deactivate_all,
-    get_new_active_count,
-    get_prev_active_count,
-    init_schema,
-)
-from src.discord_notify import send_discord
-from src.errors import ValidationError
-from src.github_release import delete_asset_if_exists, get_or_create_latest_release, upload_asset
-from src.parser import find_target_table, parse_song_table
-from src.scraper import fetch_html
+from src.textage_loader import fetch_textage_tables
+from src.sqlite_builder import build_or_update_sqlite
+from src.github_release import upload_sqlite_to_latest_release
+from src.discord_notify import send_discord_message
 
 
-def run() -> None:
+def now_iso() -> str:
     """
-    曲マスタDB生成処理を実行する。
-
-    Raises:
-        ValidationError: データ整合性チェックや必須設定不足がある場合。
-        Exception: 予期しないエラーが発生した場合。
-    """
-    settings = load_settings("settings.yaml")
-
-    discord_webhook_url = (os.environ.get("DISCORD_WEBHOOK_URL") or "").strip() or None
-
-    send_discord(discord_webhook_url, f"[START] song master build v{settings.version}")
-
-    # スクレイピング
-    new_html = fetch_html(settings.new_song_url)
-    old_html = fetch_html(settings.old_song_url)
-
-    new_idx, new_table = find_target_table(new_html)
-    old_idx, old_table = find_target_table(old_html)
-
-    new_rows = parse_song_table(new_table)
-    old_rows = parse_song_table(old_table)
-
-    merged_rows = old_rows + new_rows
-
-    # 重複排除ルール: 同一music_keyが複数行なら先勝ちで後続を無視
-    seen: dict[str, object] = {}
-    deduplicated_rows = []
-    for song in merged_rows:
-        key = build_music_key(song.title, song.artist)
-        if key not in seen:
-            seen[key] = song
-            deduplicated_rows.append(song)
+    現在のUTC時刻をISO 8601形式の文字列で取得する。
     
-    merged_rows = deduplicated_rows
+    Returns:
+        str: ISO 8601形式でフォーマットされた現在のUTC時刻文字列。
+    """
+    return datetime.now(timezone.utc).isoformat()
 
-    con = connect_db(settings.output_db_path)
-    init_schema(con)
 
-    prev_active = get_prev_active_count(con)
-
+def main():
+    """
+    IIDX全曲マスターデータの更新と配布を行うメイン処理。
+    以下の処理を順序実行する:
+    1. Textageから楽曲情報テーブルを取得
+    2. SQLiteデータベースを構築または更新
+    3. 更新したSQLiteファイルをGitHub Releasesの最新リリースにアップロード
+    4. Discord Webhookで処理結果を通知（成功/失敗）
+    環境変数の要件:
+    - GITHUB_REPOSITORY: GitHubのリポジトリ(owner/repo形式)
+    - GITHUB_TOKEN: GitHubAPI認証用トークン
+    - SQLITE_PATH: SQLiteファイルパス(デフォルト: "song_master.sqlite")
+    - DISCORD_WEBHOOK_URL: Discord通知先(オプション)
+    処理の成功時はSUCCESS、失敗時は例外を発生させる。
+    Raises:
+        Exception: 処理中に任意のエラーが発生した場合。
+                   エラー内容はDiscordに通知される（設定済みの場合）
+    """
     try:
-        con.execute("BEGIN")
-        deactivate_all(con)
+        repo = os.environ["GITHUB_REPOSITORY"]  # owner/repo
+        token = os.environ["GITHUB_TOKEN"]
+        sqlite_path = os.environ.get("SQLITE_PATH", "song_master.sqlite")
 
-        for song in merged_rows:
-            apply_song(con, song)
+        discord_webhook = os.environ.get("DISCORD_WEBHOOK_URL")
 
-        con.commit()
+        # 1. textage JS取得
+        titletbl, datatbl, actbl = fetch_textage_tables()
 
-    except Exception as e:
-        con.rollback()
-        raise e
-
-    new_active = get_new_active_count(con)
-
-    # 増減率チェック
-    if prev_active > 0 and new_active < int(prev_active * 0.9):
-        raise ValidationError(
-            f"Active count dropped too much: prev={prev_active}, new={new_active}"
+        # 2. SQLite更新
+        result = build_or_update_sqlite(
+            sqlite_path=sqlite_path,
+            titletbl=titletbl,
+            datatbl=datatbl,
+            actbl=actbl
         )
 
-    # GitHub Releases upload
-    if settings.github.upload_to_release:
-        token = (os.environ.get("GITHUB_TOKEN") or "").strip()
-        if not token:
-            raise ValidationError(
-                "GITHUB_TOKEN is empty but upload_to_release is enabled"
+        # 3. GitHub Releasesへアップロード（latest release）
+        upload_sqlite_to_latest_release(
+            repo=repo,
+            token=token,
+            sqlite_path=sqlite_path,
+        )
+
+        # 4. Discord通知（成功）
+        if discord_webhook:
+            msg = (
+                f"✅ song_master.sqlite 更新成功\n"
+                f"- music processed: {result['music_processed']}\n"
+                f"- chart processed: {result['chart_processed']}\n"
+                f"- ignored: {result['ignored']}\n"
+                f"- updated_at: {now_iso()}\n"
             )
+            send_discord_message(discord_webhook, msg)
 
-        if not settings.github.owner or not settings.github.repo:
-            raise ValidationError("github.owner/repo is empty")
+        print("SUCCESS")
 
-        release = get_or_create_latest_release(
-            settings.github.owner,
-            settings.github.repo,
-            token,
-            tag_name=f"v{settings.version}",
-        )
-        delete_asset_if_exists(release, settings.github.asset_name, token)
+    except Exception:
+        err = traceback.format_exc()
+        print(err, file=sys.stderr)
 
-        upload_url = release["upload_url"]
-        upload_asset(upload_url, settings.github.asset_name, settings.output_db_path, token)
+        discord_webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+        if discord_webhook:
+            msg = (
+                f"❌ song_master.sqlite 更新失敗\n"
+                f"```{err[:1800]}```"
+            )
+            send_discord_message(discord_webhook, msg)
 
-    msg = (
-        f"[SUCCESS] v{settings.version}\n"
-        f"new_table_index={new_idx}, old_table_index={old_idx}\n"
-        f"rows(new)={len(new_rows)}, rows(old)={len(old_rows)}, merged={len(merged_rows)}\n"
-        f"active_music_count={new_active}"
-    )
-    send_discord(discord_webhook_url, msg)
+        raise
 
 
 if __name__ == "__main__":
-    try:
-        run()
-    except Exception as e:
-        tb = traceback.format_exc()
-        print(tb)
-
-        webhook_url = (os.environ.get("DISCORD_WEBHOOK_URL") or "").strip() or None
-        send_discord(webhook_url, f"[FAILED]\n{e}\n```{tb}```")
-
-        raise
+    main()

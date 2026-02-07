@@ -1,34 +1,20 @@
 """
-Discord Webhook通知を行うユーティリティ。
-
-このモジュールは処理結果(成功/失敗/統計)をDiscordへ送信する用途で使用する。
-通知失敗は処理全体の失敗とはみなさず、例外は握りつぶす。
+Discord通知機能を提供するモジュール。
+このモジュールは、Discord Webhook URLを使用してDiscordチャネルにメッセージを送信する機能を提供します。
 """
-
-from __future__ import annotations
-
 import requests
-from requests import RequestException
 
-
-def send_discord(webhook_url: str, message: str) -> None:
+def send_discord_message(webhook_url: str, content: str):
     """
-    Discord Webhookへメッセージを送信する。
-
-    webhook_urlが空の場合は何もせず終了する。
-    通知失敗は致命的なエラーとせず、例外は握りつぶす。
+    Discord webhook を通じてメッセージを送信します。
 
     Args:
-        webhook_url: Discord Webhook URL。
-        message: 送信する本文。
+        webhook_url (str): Discord webhook URL
+        content (str): 送信するメッセージ内容
+
+    Raises:
+        requests.exceptions.HTTPError: HTTP リクエストが失敗した場合
     """
-    if not webhook_url:
-        return
-
-    payload = {"content": message}
-
-    try:
-        requests.post(webhook_url, json=payload, timeout=15)
-    except RequestException:
-        # 通知失敗は致命にしない
-        return
+    payload = {"content": content}
+    r = requests.post(webhook_url, json=payload, timeout=15)
+    r.raise_for_status()
