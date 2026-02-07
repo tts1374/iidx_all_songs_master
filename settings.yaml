@@ -1,5 +1,3 @@
-version: 33
-
 output_db_path: "song_master.sqlite"
 
 github:
