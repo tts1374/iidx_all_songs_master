@@ -61,19 +61,18 @@ def run() -> None:
     new_rows = parse_song_table(new_table)
     old_rows = parse_song_table(old_table)
 
-    merged_rows = new_rows + old_rows
+    merged_rows = old_rows + new_rows
 
-    # 重複排除ルール: 同一music_keyが複数行ならエラー
+    # 重複排除ルール: 同一music_keyが複数行なら先勝ちで後続を無視
     seen: dict[str, object] = {}
+    deduplicated_rows = []
     for song in merged_rows:
         key = build_music_key(song.title, song.artist)
-        if key in seen:
-            prev_song = seen[key]
-            raise ValidationError(
-                f"Duplicate music_key detected: {song.title} / {song.artist} "
-                f"(already seen: {prev_song.title} / {prev_song.artist})"
-            )
-        seen[key] = song
+        if key not in seen:
+            seen[key] = song
+            deduplicated_rows.append(song)
+    
+    merged_rows = deduplicated_rows
 
     con = connect_db(settings.output_db_path)
     init_schema(con)
