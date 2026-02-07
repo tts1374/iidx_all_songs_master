@@ -275,12 +275,14 @@ def build_or_update_sqlite(
             ignored += 1
             continue
 
-        # titletbl: [version, textage_id, opt?, genre, artist, title]
+        # titletbl: [version, textage_id, opt?, genre, artist, title, subtitle?]
         version = str(row[0])
         textage_id = str(row[1])
         genre = str(row[3])
         artist = str(row[4])
         title = str(row[5])
+        if len(row) > 6 and row[6]:
+            title = title + " " + str(row[6])
 
         # actbl[tag][0] はフラグ領域
         # bit0: AC収録
