@@ -5,7 +5,8 @@ on:
   schedule:
     # 毎月1日 03:00 JST（UTC 18:00前日）
     - cron: "0 18 * * *"
-
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
