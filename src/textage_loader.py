@@ -30,35 +30,113 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
         raise RuntimeError(f"{varname} not found in js")
 
     start = m.start()
-    body = js_text[start:]
+    # varname= の直後の '{' の位置を特定し、対応する '}' を見つけてブロックを抜き出す
+    brace_start = js_text.find('{', start)
+    if brace_start == -1:
+        raise RuntimeError(f"cannot find opening brace for {varname}")
 
-    # varname= の直後から最後の "};" までを抜く
-    m2 = re.search(rf"{varname}\s*=\s*(\{{.*\}})\s*;", body, flags=re.S)
-    if not m2:
-        raise RuntimeError(f"cannot parse {varname} body")
+    # バランスを取りつつ終端 '}' を探す（文字列リテラル中は無視）
+    i = brace_start
+    depth = 0
+    in_str = False
+    esc = False
+    str_char = None
+    end_idx = None
+    while i < len(js_text):
+        ch = js_text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == '\\':
+                esc = True
+            elif ch == str_char:
+                in_str = False
+        else:
+            if ch == '"' or ch == "'":
+                in_str = True
+                str_char = ch
+            elif ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    end_idx = i
+                    break
+        i += 1
 
-    obj_text = m2.group(1)
+    if end_idx is None:
+        raise RuntimeError(f"cannot find closing brace for {varname}")
+
+    obj_text = js_text[brace_start:end_idx+1]
 
     # JS -> JSON化
-    # JavaScriptのコメント（//...）を削除
+    # 1) ファイル先頭に定義される定数 (例: SS=35) を抽出してオブジェクト内で置換
+    consts = dict(re.findall(r"([A-Z_][A-Z0-9_]*)\s*=\s*([0-9]+)\s*;", js_text))
+    if consts:
+        for name, val in consts.items():
+            obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", val, obj_text)
+
+    # 2) JavaScriptのコメント（//...）を削除
     obj_text = re.sub(r"//[^\n]*\n", "\n", obj_text)
 
-    # .fontcolor(...) などのメソッド呼び出しを削除
+    # 3) .fontcolor(...) などのメソッド呼び出しを削除
     obj_text = re.sub(r'\.fontcolor\([^)]*\)', '', obj_text)
 
-    # キーのシングルクォートをダブルクォートに置き換え: 'key': -> "key":
-    # 値はすでにダブルクォートで囲まれているため、キーの部分のみを置き換える
+    # 4) キーのシングルクォートをダブルクォートに置き換え: 'key': -> "key":
     obj_text = re.sub(r"'([^']*?)'(\s*):", r'"\1"\2:', obj_text)
 
-    # actbl.js は A,B,C,F などが裸で入っているので "A" に変換
-    # 例: [3,0,0,3,1,6,7,A,7,C,...]
+    # 5) actbl.js 用の裸の16進識別子を文字列化
     obj_text = re.sub(r"(?<=,)([A-F])(?=,)", r'"\1"', obj_text)
     obj_text = re.sub(r"(?<=\[)([A-F])(?=,)", r'"\1"', obj_text)
     obj_text = re.sub(r"(?<=,)([A-F])(?=\])", r'"\1"', obj_text)
 
-    # JSONとしてロード
+    # 6) 文字列リテラル内の制御文字（ord < 0x20）を Unicode エスケープで置換
+    def _escape_ctrl(match):
+        s = match.group(1)
+        out = []
+        i = 0
+        while i < len(s):
+            ch = s[i]
+            if ch == '\\' and i + 1 < len(s):
+                # 既存のエスケープシーケンスはそのまま保持
+                out.append(ch)
+                i += 1
+                out.append(s[i])
+            else:
+                if ord(ch) < 0x20:
+                    out.append('\\u%04x' % ord(ch))
+                else:
+                    out.append(ch)
+            i += 1
+        return '"' + ''.join(out) + '"'
+
+    # titletbl のみ特別な処理（定数置換後にエントリを個別に抽出・パース）
+    if varname == "titletbl":
+        res = {}
+        # 定数を置換（SS=35など）
+        for name, val in consts.items():
+            obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", val, obj_text)
+        
+        # 正規表現で各エントリを抽出: 'key': [...] または "key": [...]
+        entry_re = re.compile(r"['\"]([^'\"]+)['\"]\s*:\s*(\[[^\]]*\])", flags=re.S)
+        for key, arr_text in entry_re.findall(obj_text):
+            try:
+                arr = json.loads(arr_text)
+                # arr[0] を文字列化
+                if isinstance(arr, list) and len(arr) > 0:
+                    arr[0] = str(arr[0])
+                res[key] = arr
+            except json.JSONDecodeError:
+                # パース失敗は無視
+                continue
+        return res
+
+    # その他のテーブル（datatbl, actbl）は元の処理で対応
+    obj_text = re.sub(r'"((?:\\.|[^"\\\n])*)"', _escape_ctrl, obj_text)
+
     try:
-        return json.loads(obj_text)
+        parsed = json.loads(obj_text)
+        return parsed
     except Exception as e:
         raise RuntimeError(f"json parse failed for {varname}: {e}") from e
 
