@@ -284,10 +284,10 @@ def build_or_update_sqlite(
         if len(row) > 6 and row[6]:
             title = title + " " + str(row[6])
 
-        # actbl[tag][0] はフラグ領域
+        # actbl[tag][0] はフラグ領域（16進数文字列）
         # bit0: AC収録
         # bit1: INFINITAS収録
-        flags = int(actbl[tag][0])
+        flags = int(actbl[tag][0], 16)
         is_ac_active = 1 if (flags & 0x01) else 0
         is_inf_active = 1 if (flags & 0x02) else 0
 
