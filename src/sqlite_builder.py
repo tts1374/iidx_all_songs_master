@@ -17,7 +17,44 @@ Upsert(存在すれば更新、無ければ追加)することでDBを最新状�
 """
 
 import sqlite3
+import re
+import html
 from datetime import datetime, timezone
+
+
+TAG_RE = re.compile(r"<[^>]+>")
+
+
+def normalize_textage_string(s: str) -> str:
+    """
+    Textage由来の文字列をDB登録用に正規化する。
+
+    対応内容:
+    - HTML文字実体参照のデコード (例: &#332; -> Ō)
+    - HTMLタグ除去 (例: <br>, <span ...> 等)
+    - 空白の正規化
+
+    Args:
+        s (str): Textage由来文字列
+
+    Returns:
+        str: 正規化後文字列
+    """
+    if s is None:
+        return ""
+
+    s = str(s)
+
+    # 文字実体参照をデコード
+    s = html.unescape(s)
+
+    # HTMLタグ除去
+    s = TAG_RE.sub("", s)
+
+    # 空白正規化
+    s = re.sub(r"\s+", " ", s).strip()
+
+    return s
 
 
 def now_iso() -> str:
@@ -278,18 +315,22 @@ def build_or_update_sqlite(
         # titletbl: [version, textage_id, opt?, genre, artist, title, subtitle?]
         version_raw = str(row[0])
 
-        # textage_loader側で SS=35 を -35 に変換しているため、
-        # -35 は SS として扱いDBへ登録する
+        # versionの -35 → SS は適用済み
         if version_raw == "-35":
             version = "SS"
         else:
             version = version_raw
+
         textage_id = str(row[1])
-        genre = str(row[3])
-        artist = str(row[4])
-        title = str(row[5])
+
+        genre = normalize_textage_string(row[3])
+        artist = normalize_textage_string(row[4])
+        title = normalize_textage_string(row[5])
+
         if len(row) > 6 and row[6]:
-            title = title + " " + str(row[6])
+            subtitle = normalize_textage_string(row[6])
+            if subtitle:
+                title = f"{title} {subtitle}"
 
         # actbl[tag][0] はフラグ領域（16進数文字列または整数値）
         # bit0: AC収録
@@ -299,6 +340,7 @@ def build_or_update_sqlite(
             flags = value
         else:
             flags = int(value, 16)
+
         is_ac_active = 1 if (flags & 0x01) else 0
         is_inf_active = 1 if (flags & 0x02) else 0
 
@@ -324,10 +366,8 @@ def build_or_update_sqlite(
             lv_hex = actbl[tag][t * 2 + 1]
 
             if isinstance(lv_hex, int):
-                # 万が一intの場合はそのまま利用
                 lv_int = lv_hex
             else:
-                # "A" 等の16進数文字列を想定
                 lv_int = int(str(lv_hex), 16)
 
             # レベルが0の場合は譜面無し扱い（無効）
