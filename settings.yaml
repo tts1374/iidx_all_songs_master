@@ -1,4 +1,5 @@
 output_db_path: "song_master.sqlite"
+schema_version: "33"
 
 github:
   owner: "tts1374"

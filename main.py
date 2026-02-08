@@ -94,6 +94,7 @@ def main():
         repo = github_cfg.get("repo")
         upload_to_release = github_cfg.get("upload_to_release", False)
         asset_name = github_cfg.get("asset_name", "song_master.sqlite")
+        schema_version = settings.get("schema_version", "1")
 
         if not owner or not repo:
             raise RuntimeError("settings.yaml: github.owner / github.repo が未設定です")
@@ -102,13 +103,15 @@ def main():
         discord_webhook = os.environ.get("DISCORD_WEBHOOK_URL")
 
         # 0. latest release から sqlite を取得（あれば）
-        downloaded = download_latest_sqlite_from_release(
+        download_info = download_latest_sqlite_from_release(
             owner=owner,
             repo=repo,
             sqlite_path=sqlite_path,
             token=token,
             asset_name=asset_name,
         )
+        downloaded = download_info.get("downloaded", False)
+        asset_updated_at = download_info.get("asset_updated_at")
 
         # 1. textage JS取得
         titletbl, datatbl, actbl = fetch_textage_tables()
@@ -120,6 +123,8 @@ def main():
             datatbl=datatbl,
             actbl=actbl,
             reset_flags=True,
+            schema_version=schema_version,
+            asset_updated_at=asset_updated_at,
         )
 
         # 3. GitHub Releasesへアップロード

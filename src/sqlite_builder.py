@@ -84,7 +84,7 @@ def download_latest_sqlite_from_release(
     sqlite_path: str,
     token: str | None = None,
     asset_name: str = "song_master.sqlite",
-) -> bool:
+) -> dict:
     """
     GitHub Releases の latest release から sqlite asset をダウンロードする。
 
@@ -103,7 +103,7 @@ def download_latest_sqlite_from_release(
 
     # releaseが無い場合
     if r.status_code == 404:
-        return False
+        return {"downloaded": False, "asset_updated_at": None}
 
     r.raise_for_status()
     data = r.json()
@@ -116,11 +116,11 @@ def download_latest_sqlite_from_release(
             break
 
     if not target:
-        return False
+        return {"downloaded": False, "asset_updated_at": None}
 
     download_url = target.get("browser_download_url")
     if not download_url:
-        return False
+        return {"downloaded": False, "asset_updated_at": None}
 
     r2 = requests.get(download_url, timeout=60)
     r2.raise_for_status()
@@ -129,7 +129,10 @@ def download_latest_sqlite_from_release(
     with open(sqlite_path, "wb") as f:
         f.write(r2.content)
 
-    return True
+    return {
+        "downloaded": True,
+        "asset_updated_at": target.get("updated_at"),
+    }
 
 
 def ensure_schema(conn: sqlite3.Connection):
@@ -168,6 +171,14 @@ def ensure_schema(conn: sqlite3.Connection):
         FOREIGN KEY(music_id) REFERENCES music(music_id)
     );
     """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS meta (
+        schema_version TEXT NOT NULL,
+        asset_updated_at TEXT NOT NULL,
+        generated_at TEXT NOT NULL
+    );
+    """)
     
     # インデックス追加: chart(music_id, is_active)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_chart_music_active ON chart(music_id, is_active);")
@@ -178,6 +189,21 @@ def ensure_schema(conn: sqlite3.Connection):
     # インデックス追加: chart(is_active, notes)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_chart_notes_active ON chart(is_active, notes);")
     
+    conn.commit()
+
+
+def upsert_meta(
+    conn: sqlite3.Connection,
+    schema_version: str,
+    asset_updated_at: str,
+    generated_at: str,
+):
+    cur = conn.cursor()
+    cur.execute("DELETE FROM meta;")
+    cur.execute(
+        "INSERT INTO meta (schema_version, asset_updated_at, generated_at) VALUES (?, ?, ?)",
+        (schema_version, asset_updated_at, generated_at),
+    )
     conn.commit()
 
 
@@ -308,7 +334,9 @@ def build_or_update_sqlite(
     titletbl: dict,
     datatbl: dict,
     actbl: dict,
-    reset_flags: bool = True
+    reset_flags: bool = True,
+    schema_version: str = "1",
+    asset_updated_at: str | None = None,
 ) -> dict:
     """
     Textageデータを元にSQLite DBを生成または更新する。
@@ -394,6 +422,14 @@ def build_or_update_sqlite(
                 is_active=is_active
             )
             chart_processed += 1
+
+    asset_value = asset_updated_at or now_iso()
+    upsert_meta(
+        conn,
+        schema_version=schema_version,
+        asset_updated_at=asset_value,
+        generated_at=now_iso(),
+    )
 
     conn.commit()
     conn.close()
