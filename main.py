@@ -18,7 +18,7 @@ SQLiteデータベース(song_master.sqlite)を更新する。
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import sys
 import traceback
 import yaml
@@ -28,15 +28,17 @@ from src.sqlite_builder import build_or_update_sqlite, download_latest_sqlite_fr
 from src.github_release import upload_sqlite_to_latest_release
 from src.discord_notify import send_discord_message
 
+JST = timezone(timedelta(hours=9), "JST")
+
 
 def now_iso() -> str:
     """
-    現在のUTC時刻をISO 8601形式の文字列で取得する。
+    現在のJST時刻をISO 8601形式の文字列で取得する。
 
     Returns:
-        str: ISO 8601形式でフォーマットされた現在のUTC時刻文字列。
+        str: ISO 8601形式でフォーマットされた現在のJST時刻文字列。
     """
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(JST).isoformat()
 
 
 def load_settings(path: str = "settings.yaml") -> dict:

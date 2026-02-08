@@ -26,10 +26,11 @@ import re
 import html
 import os
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 
 TAG_RE = re.compile(r"<[^>]+>")
+JST = timezone(timedelta(hours=9), "JST")
 
 
 def normalize_textage_string(s: str) -> str:
@@ -59,8 +60,8 @@ def normalize_textage_string(s: str) -> str:
 
 
 def now_iso() -> str:
-    """現在のUTC時刻をISO 8601形式で返す。"""
-    return datetime.now(timezone.utc).isoformat()
+    """現在のJST時刻をISO 8601形式で返す。"""
+    return datetime.now(JST).isoformat()
 
 
 # chart登録対象の譜面種別一覧。
