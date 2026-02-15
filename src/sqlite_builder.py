@@ -244,7 +244,9 @@ def ensure_schema(conn: sqlite3.Connection):
     """
     )
 
-    if _table_exists(conn, "music") and not _column_exists(conn, "music", "title_search_key"):
+    if _table_exists(conn, "music") and not _column_exists(
+        conn, "music", "title_search_key"
+    ):
         cur.execute(
             "ALTER TABLE music ADD COLUMN title_search_key TEXT NOT NULL DEFAULT ''"
         )
@@ -255,13 +257,15 @@ def ensure_schema(conn: sqlite3.Connection):
         "CREATE INDEX IF NOT EXISTS idx_chart_music_active ON chart(music_id, is_active);"
     )
     cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_chart_filter ON chart(play_style, difficulty, level, is_active);"
+        "CREATE INDEX IF NOT EXISTS idx_chart_filter "
+        "ON chart(play_style, difficulty, level, is_active);"
     )
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_chart_notes_active ON chart(is_active, notes);"
     )
     cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_music_title_search_key ON music(title_search_key);"
+        "CREATE INDEX IF NOT EXISTS idx_music_title_search_key "
+        "ON music(title_search_key);"
     )
 
     conn.commit()
@@ -273,6 +277,7 @@ def upsert_meta(
     asset_updated_at: str,
     generated_at: str,
 ):
+    """meta テーブルを最新1行で更新する。"""
     cur = conn.cursor()
     cur.execute("DELETE FROM meta;")
     cur.execute(
@@ -300,6 +305,7 @@ def reset_all_music_active_flags(conn: sqlite3.Connection):
     conn.commit()
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def upsert_music(
     conn: sqlite3.Connection,
     textage_id: str,
@@ -375,6 +381,7 @@ def upsert_music(
     return music_id
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def upsert_chart(
     conn: sqlite3.Connection,
     music_id: int,
@@ -383,7 +390,7 @@ def upsert_chart(
     level: int,
     notes: int,
     is_active: int,
-):
+) -> None:
     """chart 1件を Upsert する。"""
     cur = conn.cursor()
     now = now_iso()
@@ -444,6 +451,7 @@ def upsert_chart(
     )
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def build_or_update_sqlite(
     sqlite_path: str,
     titletbl: dict,

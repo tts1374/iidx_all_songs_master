@@ -1,3 +1,5 @@
+"""sqlite_builder の fixture ベース動作検証。"""
+
 from __future__ import annotations
 
 import sqlite3
@@ -17,10 +19,12 @@ def _make_title_row(
     artist: str = "ARTIST",
     title: str = "TITLE",
 ) -> list:
+    """titletbl 1行分のダミーデータを作る。"""
     return [version, textage_id, "", genre, artist, title]
 
 
 def _make_data_row(*, base_notes: int = 100) -> list[int]:
+    """datatbl 1行分のダミーデータを作る。"""
     row = [0] * 11
     for chart_type, _, _, _ in CHART_TYPES:
         row[chart_type] = base_notes + chart_type
@@ -33,6 +37,7 @@ def _make_act_row(
     default_level_hex: str = "5",
     level_overrides: dict[int, str] | None = None,
 ) -> list:
+    """actbl 1行分のダミーデータを作る。"""
     row = [0] * 22
     row[0] = flags_hex
     for chart_type, _, _, _ in CHART_TYPES:
@@ -44,6 +49,7 @@ def _make_act_row(
 
 
 def _read_music_row(conn: sqlite3.Connection, textage_id: str) -> tuple:
+    """比較用に music 行の主要時刻列を読む。"""
     return conn.execute(
         """
         SELECT music_id, created_at, updated_at, last_seen_at
@@ -56,6 +62,7 @@ def _read_music_row(conn: sqlite3.Connection, textage_id: str) -> tuple:
 
 @pytest.mark.light
 def test_fixture_parsing_and_missing_rows_are_ignored(tmp_path: Path):
+    """datatbl/actbl 欠損キーが除外されることを検証する。"""
     sqlite_path = tmp_path / "fixture.sqlite"
 
     titletbl = {
@@ -92,6 +99,7 @@ def test_fixture_parsing_and_missing_rows_are_ignored(tmp_path: Path):
 
 @pytest.mark.light
 def test_invalid_hex_level_in_actbl_fails(tmp_path: Path):
+    """actbl の不正16進値を ValueError として検出できることを検証する。"""
     sqlite_path = tmp_path / "invalid_hex.sqlite"
     titletbl = {"bad": _make_title_row(textage_id="B001", title="BAD")}
     datatbl = {"bad": _make_data_row()}
@@ -109,6 +117,7 @@ def test_invalid_hex_level_in_actbl_fails(tmp_path: Path):
 
 @pytest.mark.light
 def test_lightweight_schema_minimum_constraints(tmp_path: Path):
+    """軽量検証として最低限スキーマ制約があることを確認する。"""
     sqlite_path = tmp_path / "schema_minimum.sqlite"
     build_or_update_sqlite(
         sqlite_path=str(sqlite_path),
@@ -139,6 +148,7 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
 
 @pytest.mark.light
 def test_diff_update_converges_and_updates_flags(tmp_path: Path):
+    """同一キー2回生成で収束し、更新列と is_active が正しく変化することを確認する。"""
     sqlite_path = tmp_path / "update.sqlite"
     textage_id = "C001"
 

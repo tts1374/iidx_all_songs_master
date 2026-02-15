@@ -1,20 +1,20 @@
-"""
-Discord通知機能を提供するモジュール。
-このモジュールは、Discord Webhook URLを使用してDiscordチャネルにメッセージを送信する機能を提供します。
-"""
+"""Discord通知用の最小ユーティリティ。"""
+
 import requests
 
-def send_discord_message(webhook_url: str, content: str):
+
+def send_discord_message(webhook_url: str, content: str) -> None:
     """
-    Discord webhook を通じてメッセージを送信します。
+    Discord Webhook にテキストメッセージを送信する。
 
     Args:
-        webhook_url (str): Discord webhook URL
-        content (str): 送信するメッセージ内容
+        webhook_url: Discord Webhook URL。
+        content: 送信本文。
 
     Raises:
-        requests.exceptions.HTTPError: HTTP リクエストが失敗した場合
+        requests.exceptions.HTTPError:
+            Discord API がエラーを返した場合。
     """
     payload = {"content": content}
-    r = requests.post(webhook_url, json=payload, timeout=15)
-    r.raise_for_status()
+    response = requests.post(webhook_url, json=payload, timeout=15)
+    response.raise_for_status()

@@ -1,204 +1,162 @@
-"""Textage から楽曲テーブルを取得・整形するモジュール。"""
+"""Textage からテーブルJSを取得し、Python辞書へ変換する。"""
+
+from __future__ import annotations
+
 import hashlib
 import json
 import re
-import requests
 
+import requests
 
 TITLE_URL = "https://textage.cc/score/titletbl.js"
 DATA_URL = "https://textage.cc/score/datatbl.js"
 ACT_URL = "https://textage.cc/score/actbl.js"
 
 
+# pylint: disable-next=too-many-locals,too-many-branches,too-many-statements
 def _extract_js_object(js_text: str, varname: str) -> dict:
     """
-    JavaScriptのテキストから指定された変数のオブジェクトを抽出し、JSON形式に変換して辞書として返す。
-    JavaScriptのオブジェクト表記をJSONに変換する際に、以下の処理を行う:
-    - シングルクォートをダブルクォートに変換
-    - 配列内の裸の16進数値(A-F)をダブルクォートで囲む
-    - JavaScriptのコメントとメソッド呼び出しを削除
-    Args:
-        js_text (str): JavaScriptのソースコード全体
-        varname (str): 抽出対象のオブジェクト変数名
-    Returns:
-        dict: パースされたオブジェクトを辞書形式で返す
-    Raises:
-        RuntimeError: 指定された変数が見つからない場合、またはJSONのパースに失敗した場合
-    """
+    JSテキスト中の `varname = {...}` を抽出し、辞書に変換する。
 
-    m = re.search(rf"{varname}\s*=\s*\{{", js_text)
-    if not m:
+    変換時に以下を行う:
+    - 定数（例: `SS=35`）を負値へ置換
+    - 行コメントの除去
+    - `.fontcolor(...)` の除去
+    - シングルクォートキーのJSON化
+    - actblの裸識別子 `A-F` の文字列化
+    """
+    match = re.search(rf"{varname}\s*=\s*\{{", js_text)
+    if not match:
         raise RuntimeError(f"{varname} が JS 内に見つかりません")
 
-    start = m.start()
-    # varname= の直後の '{' の位置を特定し、対応する '}' を見つけてブロックを抜き出す
-    brace_start = js_text.find('{', start)
+    start = match.start()
+    brace_start = js_text.find("{", start)
     if brace_start == -1:
-        raise RuntimeError(f"cannot find opening brace for {varname}")
+        raise RuntimeError(f"{varname} の開始ブレースが見つかりません")
 
-    # バランスを取りつつ終端 '}' を探す（文字列リテラル中は無視）
-    i = brace_start
+    index = brace_start
     depth = 0
     in_str = False
-    esc = False
-    str_char = None
-    end_idx = None
-    while i < len(js_text):
-        ch = js_text[i]
+    escaped = False
+    str_char = ""
+    end_index = None
+    while index < len(js_text):
+        ch = js_text[index]
         if in_str:
-            if esc:
-                esc = False
-            elif ch == '\\':
-                esc = True
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
             elif ch == str_char:
                 in_str = False
         else:
-            if ch == '"' or ch == "'":
+            if ch in ('"', "'"):
                 in_str = True
                 str_char = ch
-            elif ch == '{':
+            elif ch == "{":
                 depth += 1
-            elif ch == '}':
+            elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    end_idx = i
+                    end_index = index
                     break
-        i += 1
+        index += 1
 
-    if end_idx is None:
-        raise RuntimeError(f"cannot find closing brace for {varname}")
+    if end_index is None:
+        raise RuntimeError(f"{varname} の終了ブレースが見つかりません")
 
-    obj_text = js_text[brace_start:end_idx+1]
+    obj_text = js_text[brace_start : end_index + 1]
 
-    # JS -> JSON化
-    # 1) ファイル先頭に定義される定数 (例: SS=35) を抽出してオブジェクト内で置換
+    # 定数置換（例: SS=35 -> -35）
     consts = dict(re.findall(r"([A-Z_][A-Z0-9_]*)\s*=\s*([0-9]+)\s*;", js_text))
+    for name, val in consts.items():
+        obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", f"-{val}", obj_text)
 
-    # SS のような定数は将来の通常バージョン番号と衝突する可能性があるため、
-    # 正の値ではなく負数に変換して扱う
-    if consts:
-        for name, val in consts.items():
-            neg_val = f"-{val}"
-            obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", neg_val, obj_text)
+    # JSコメント除去（末尾改行なしにも対応）
+    obj_text = re.sub(r"//[^\n]*(?=\n|$)", "", obj_text)
 
-    # 2) JavaScriptのコメント（//...）を削除
-    obj_text = re.sub(r"//[^\n]*\n", "\n", obj_text)
+    # 装飾メソッドの除去
+    obj_text = re.sub(r"\.fontcolor\([^)]*\)", "", obj_text)
 
-    # 3) .fontcolor(...) などのメソッド呼び出しを削除
-    obj_text = re.sub(r'\.fontcolor\([^)]*\)', '', obj_text)
-
-    # 4) キーのシングルクォートをダブルクォートに置き換え: 'key': -> "key":
+    # シングルクォートキーをJSON準拠へ
     obj_text = re.sub(r"'([^']*?)'(\s*):", r'"\1"\2:', obj_text)
 
-    # 5) actbl.js 用の裸の16進識別子を文字列化
+    # actbl の裸識別子 A-F を文字列化
     obj_text = re.sub(r"(?<=,)([A-F])(?=,)", r'"\1"', obj_text)
     obj_text = re.sub(r"(?<=\[)([A-F])(?=,)", r'"\1"', obj_text)
     obj_text = re.sub(r"(?<=,)([A-F])(?=\])", r'"\1"', obj_text)
 
-    # 6) 文字列リテラル内の制御文字（ord < 0x20）を Unicode エスケープで置換
-    def _escape_ctrl(match):
-        s = match.group(1)
-        out = []
-        i = 0
-        while i < len(s):
-            ch = s[i]
-            if ch == '\\' and i + 1 < len(s):
-                # 既存のエスケープシーケンスはそのまま保持
+    def _escape_ctrl(match_obj: re.Match[str]) -> str:
+        """文字列リテラル内の制御文字を `\\uXXXX` へ置換する。"""
+        src = match_obj.group(1)
+        out: list[str] = []
+        idx = 0
+        while idx < len(src):
+            ch = src[idx]
+            if ch == "\\" and idx + 1 < len(src):
                 out.append(ch)
-                i += 1
-                out.append(s[i])
+                idx += 1
+                out.append(src[idx])
             else:
                 if ord(ch) < 0x20:
-                    out.append('\\u%04x' % ord(ch))
+                    out.append(f"\\u{ord(ch):04x}")
                 else:
                     out.append(ch)
-            i += 1
-        return '"' + ''.join(out) + '"'
+            idx += 1
+        return '"' + "".join(out) + '"'
 
-    # titletbl のみ特別な処理（定数置換後にエントリを個別に抽出・パース）
+    # titletbl は配列部分だけを個別に拾ってパースする。
     if varname == "titletbl":
-        res = {}
-
-        # 定数を負数に置換（SS=35 → -35）
-        for name, val in consts.items():
-            neg_val = f"-{val}"
-            obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", neg_val, obj_text)
-
+        result: dict[str, list] = {}
         entry_re = re.compile(r"['\"]([^'\"]+)['\"]\s*:\s*(\[[^\]]*\])", flags=re.S)
         for key, arr_text in entry_re.findall(obj_text):
             try:
                 arr = json.loads(arr_text)
-
-                # arr[0] は version のため、文字列として格納する
-                if isinstance(arr, list) and len(arr) > 0:
-                    arr[0] = str(arr[0])
-
-                res[key] = arr
             except json.JSONDecodeError:
                 continue
 
-        return res
+            if isinstance(arr, list) and arr:
+                arr[0] = str(arr[0])
+            result[key] = arr
+        return result
 
-    # その他のテーブル（datatbl, actbl）は元の処理で対応
     obj_text = re.sub(r'"((?:\\.|[^"\\\n])*)"', _escape_ctrl, obj_text)
-
     try:
-        parsed = json.loads(obj_text)
-        return parsed
-    except Exception as e:
-        raise RuntimeError(f"json parse failed for {varname}: {e}") from e
+        return json.loads(obj_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"json parse failed for {varname}: {exc}") from exc
 
 
 def _sha256_hex(data: bytes) -> str:
+    """バイナリデータの SHA-256（16進）を返す。"""
     return hashlib.sha256(data).hexdigest()
 
 
 def fetch_textage_tables_with_hashes() -> tuple[dict, dict, dict, dict[str, str]]:
-    """
-    Textage テーブルを取得し、解析結果とソースハッシュを返す。
+    """Textage 3ファイルを取得し、解析結果とソースハッシュを返す。"""
+    title_resp = requests.get(TITLE_URL, timeout=30)
+    title_resp.raise_for_status()
 
-    Returns:
-        tuple:
-            - titletbl
-            - datatbl
-            - actbl
-            - source_hashes（ファイル名をキーにした sha256 16進文字列）
-    """
-    r1 = requests.get(TITLE_URL, timeout=30)
-    r1.raise_for_status()
+    data_resp = requests.get(DATA_URL, timeout=30)
+    data_resp.raise_for_status()
 
-    r2 = requests.get(DATA_URL, timeout=30)
-    r2.raise_for_status()
+    act_resp = requests.get(ACT_URL, timeout=30)
+    act_resp.raise_for_status()
 
-    r3 = requests.get(ACT_URL, timeout=30)
-    r3.raise_for_status()
-
-    titletbl = _extract_js_object(r1.text, "titletbl")
-    datatbl = _extract_js_object(r2.text, "datatbl")
-    actbl = _extract_js_object(r3.text, "actbl")
+    titletbl = _extract_js_object(title_resp.text, "titletbl")
+    datatbl = _extract_js_object(data_resp.text, "datatbl")
+    actbl = _extract_js_object(act_resp.text, "actbl")
 
     source_hashes = {
-        "titletbl.js": _sha256_hex(r1.content),
-        "datatbl.js": _sha256_hex(r2.content),
-        "actbl.js": _sha256_hex(r3.content),
+        "titletbl.js": _sha256_hex(title_resp.content),
+        "datatbl.js": _sha256_hex(data_resp.content),
+        "actbl.js": _sha256_hex(act_resp.content),
     }
 
     return titletbl, datatbl, actbl, source_hashes
 
 
 def fetch_textage_tables() -> tuple[dict, dict, dict]:
-    """
-    Textageからゲーム曲のマスターデータを取得する関数
-    3つの外部URLからHTTP GETリクエストを実行し、
-    JavaScript オブジェクト形式で記述されたテーブルデータを抽出して返す。
-    Returns:
-        tuple[dict, dict, dict]: 以下の3つの辞書を含むタプル
-            - titletbl (dict): 曲のタイトル情報を格納した辞書
-            - datatbl (dict): 曲のスコアデータ情報を格納した辞書
-            - actbl (dict): 設定活動データを格納した辞書
-    Raises:
-        requests.exceptions.HTTPError: HTTP リクエストが失敗した場合
-        requests.exceptions.Timeout: リクエストがタイムアウトした場合
-    """
+    """Textage 3ファイルを取得し、解析結果のみを返す。"""
     titletbl, datatbl, actbl, _ = fetch_textage_tables_with_hashes()
     return titletbl, datatbl, actbl

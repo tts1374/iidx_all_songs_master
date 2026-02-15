@@ -1,3 +1,5 @@
+"""title_search_key 正規化仕様の回帰テスト。"""
+
 from __future__ import annotations
 
 import sqlite3
@@ -10,6 +12,7 @@ from src.sqlite_builder import normalize_title_search_key
 
 @pytest.mark.light
 def test_normalize_title_search_key_golden_cases():
+    """正規化仕様を golden ケースで固定する。"""
     cases = [
         ("\u00f6", "o"),  # ö
         ("Stra\u00dfe", "strasse"),  # ß
@@ -35,6 +38,7 @@ def test_normalize_title_search_key_golden_cases():
 
 @pytest.mark.full
 def test_title_search_key_matches_normalizer_for_sample_rows(artifact_paths: dict):
+    """生成済みDBのサンプル行で title と title_search_key の一致を検証する。"""
     sqlite_path: Path = artifact_paths["sqlite_path"]
     conn = sqlite3.connect(str(sqlite_path))
     try:

@@ -1,8 +1,11 @@
+# pylint: disable=duplicate-code
 """
 SQLite 楽曲マスター成果物を生成し、GitHub Releases に配布するエントリーポイント。
 """
 
 from __future__ import annotations
+
+# pylint: disable=duplicate-code
 
 import json
 import os
@@ -38,15 +41,18 @@ LATEST_MANIFEST_NAME = "latest.json"
 
 
 def now_iso() -> str:
+    """現在時刻（JST）を ISO8601 文字列で返す。"""
     return datetime.now(JST).isoformat()
 
 
 def load_settings(path: str = "settings.yaml") -> dict:
+    """YAML設定ファイルを辞書として読み込む。"""
     with open(path, "r", encoding="utf-8") as file_obj:
         return yaml.safe_load(file_obj)
 
 
 def parse_bool(value, default: bool = False) -> bool:
+    """多様な入力値を bool に正規化する。"""
     if value is None:
         return default
     if isinstance(value, bool):
@@ -60,6 +66,7 @@ def has_same_textage_source_hashes(
     previous_hashes: dict[str, str] | None,
     current_hashes: dict[str, str],
 ) -> bool:
+    """Textage 3ファイルのハッシュが全一致するか判定する。"""
     if not previous_hashes:
         return False
 
@@ -75,6 +82,7 @@ def resolve_artifact_paths(
     latest_manifest_name: str,
     generated_utc: datetime,
 ) -> dict:
+    """バージョン付き SQLite 名と latest.json パスを解決する。"""
     output_base = Path(output_db_path)
     output_dir = output_base.parent if str(output_base.parent) not in {"", "."} else Path(".")
     stem = output_base.stem if output_base.suffix else output_base.name
@@ -92,6 +100,7 @@ def resolve_artifact_paths(
     }
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def download_previous_sqlite_from_release(
     repo_full: str,
     token: str,
@@ -100,6 +109,7 @@ def download_previous_sqlite_from_release(
     fallback_asset_name: str | None,
     required: bool,
 ) -> dict | None:
+    """最新リリースから前回SQLiteを取得し、保存先メタを返す。"""
     release = get_latest_release(repo_full, token)
     if release is None:
         if required:
@@ -146,7 +156,8 @@ def download_previous_sqlite_from_release(
     }
 
 
-def main():
+def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    """生成・検証・公開までのビルドフローを実行する。"""
     try:
         settings = load_settings("settings.yaml")
 

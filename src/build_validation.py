@@ -1,6 +1,4 @@
-"""
-ビルド後検証用のヘルパー群。
-"""
+"""ビルド成果物（SQLite / latest.json）の検証ユーティリティ。"""
 
 from __future__ import annotations
 
@@ -12,10 +10,12 @@ from datetime import datetime, timezone
 
 
 def utc_now_iso() -> str:
+    """現在UTC時刻を ISO8601（Z付き）で返す。"""
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def file_sha256(path: str) -> str:
+    """ファイルの SHA-256（16進文字列）を返す。"""
     digest = hashlib.sha256()
     with open(path, "rb") as file_obj:
         while True:
@@ -27,6 +27,7 @@ def file_sha256(path: str) -> str:
 
 
 def file_byte_size(path: str) -> int:
+    """ファイルサイズ（byte）を返す。"""
     return os.path.getsize(path)
 
 
@@ -36,6 +37,15 @@ def build_latest_manifest(
     generated_at: str,
     source_hashes: dict[str, str] | None = None,
 ) -> dict:
+    """
+    `latest.json` 用のメタ情報辞書を生成する。
+
+    Args:
+        sqlite_path: 生成済み SQLite ファイルパス。
+        schema_version: スキーマバージョン。
+        generated_at: 生成時刻（ISO8601）。
+        source_hashes: 元データ（titletbl/datatbl/actbl）のハッシュ辞書。
+    """
     manifest = {
         "file_name": os.path.basename(sqlite_path),
         "schema_version": schema_version,
@@ -49,6 +59,7 @@ def build_latest_manifest(
 
 
 def write_latest_manifest(latest_json_path: str, manifest: dict):
+    """`latest.json` を UTF-8 / indent=2 で書き出す。"""
     os.makedirs(os.path.dirname(latest_json_path) or ".", exist_ok=True)
     with open(latest_json_path, "w", encoding="utf-8") as file_obj:
         json.dump(manifest, file_obj, ensure_ascii=False, indent=2)
@@ -56,6 +67,14 @@ def write_latest_manifest(latest_json_path: str, manifest: dict):
 
 
 def validate_latest_manifest(latest_json_path: str, sqlite_path: str):
+    """
+    `latest.json` と SQLite 実体の整合性を検証する。
+
+    検証項目:
+    - file_name
+    - sha256
+    - byte_size
+    """
     with open(latest_json_path, "r", encoding="utf-8") as file_obj:
         manifest = json.load(file_obj)
 
@@ -65,15 +84,16 @@ def validate_latest_manifest(latest_json_path: str, sqlite_path: str):
 
     if manifest.get("file_name") != actual_name:
         raise RuntimeError(
-            f"latest.json の file_name 不一致: {manifest.get('file_name')} != {actual_name}"
+            f"latest.json の file_name が不一致です: {manifest.get('file_name')} != {actual_name}"
         )
     if manifest.get("sha256") != actual_sha:
-        raise RuntimeError("latest.json の sha256 が SQLite 実体と不一致です")
+        raise RuntimeError("latest.json の sha256 が SQLite 実体と一致しません")
     if manifest.get("byte_size") != actual_size:
-        raise RuntimeError("latest.json の byte_size が SQLite 実体と不一致です")
+        raise RuntimeError("latest.json の byte_size が SQLite 実体と一致しません")
 
 
 def _index_columns(conn: sqlite3.Connection, index_name: str) -> list[str]:
+    """指定インデックスの列順を返す。"""
     cur = conn.cursor()
     cur.execute(f"PRAGMA index_info({index_name});")
     rows = cur.fetchall()
@@ -85,6 +105,7 @@ def _has_unique_index(
     table_name: str,
     expected_columns: list[str],
 ) -> bool:
+    """指定テーブルに期待列順の UNIQUE インデックスが存在するか判定する。"""
     cur = conn.cursor()
     cur.execute(f"PRAGMA index_list({table_name});")
     for row in cur.fetchall():
@@ -98,17 +119,19 @@ def _has_unique_index(
 
 
 def _assert_not_null_column(conn: sqlite3.Connection, table_name: str, column_name: str):
+    """列が存在し、NOT NULL 制約を持つことを検証する。"""
     cur = conn.cursor()
     cur.execute(f"PRAGMA table_info({table_name});")
     for row in cur.fetchall():
         if row[1] == column_name:
             if row[3] != 1:
-                raise RuntimeError(f"{table_name}.{column_name} は NOT NULL である必要があります")
+                raise RuntimeError(f"{table_name}.{column_name} は NOT NULL 制約が必要です")
             return
     raise RuntimeError(f"列が見つかりません: {table_name}.{column_name}")
 
 
 def _assert_index_exists(conn: sqlite3.Connection, table_name: str, index_name: str):
+    """指定テーブルに指定インデックスが存在することを検証する。"""
     cur = conn.cursor()
     cur.execute(f"PRAGMA index_list({table_name});")
     names = {row[1] for row in cur.fetchall()}
@@ -117,6 +140,17 @@ def _assert_index_exists(conn: sqlite3.Connection, table_name: str, index_name: 
 
 
 def validate_db_schema_and_data(sqlite_path: str):
+    """
+    生成SQLiteの最低限スキーマ・データ要件を検証する。
+
+    検証項目:
+    - `music.textage_id` が NOT NULL
+    - `music.title_search_key` が NOT NULL
+    - `music.textage_id` に UNIQUE 制約がある
+    - `chart(music_id, play_style, difficulty)` に UNIQUE 制約がある
+    - `idx_music_title_search_key` が存在する
+    - `title_search_key` の NULL 行がない
+    """
     conn = sqlite3.connect(sqlite_path)
     try:
         _assert_not_null_column(conn, "music", "textage_id")
@@ -134,14 +168,13 @@ def validate_db_schema_and_data(sqlite_path: str):
         cur.execute("SELECT COUNT(*) FROM music WHERE title_search_key IS NULL;")
         null_count = int(cur.fetchone()[0])
         if null_count > 0:
-            raise RuntimeError(
-                f"title_search_key に NULL が含まれています: {null_count} 件"
-            )
+            raise RuntimeError(f"title_search_key に NULL が含まれています: {null_count} 件")
     finally:
         conn.close()
 
 
 def _load_chart_key_map(sqlite_path: str) -> dict[tuple[str, str, str], int]:
+    """比較キー `(textage_id, play_style, difficulty)` から `chart_id` を引く辞書を作る。"""
     conn = sqlite3.connect(sqlite_path)
     try:
         cur = conn.cursor()
@@ -163,6 +196,21 @@ def validate_chart_id_stability(
     new_sqlite_path: str,
     missing_policy: str = "error",
 ) -> dict:
+    """
+    旧版SQLiteと新版SQLiteで `chart_id` の永続性を検証する。
+
+    比較キー:
+    - textage_id
+    - play_style
+    - difficulty
+
+    Args:
+        old_sqlite_path: ベースライン SQLite。
+        new_sqlite_path: 新規生成 SQLite。
+        missing_policy: 旧版に存在し新版にない譜面の扱い。
+            - `"error"`: 失敗
+            - `"warn"`: 許容（件数のみ返す）
+    """
     if missing_policy not in {"error", "warn"}:
         raise ValueError("missing_policy は 'error' または 'warn' を指定してください")
 

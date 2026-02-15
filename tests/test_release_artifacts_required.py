@@ -1,3 +1,5 @@
+"""配布物（SQLite/latest.json）の必須整合性テスト。"""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -11,6 +13,7 @@ from src.build_validation import validate_chart_id_stability
 
 
 def _sha256_hex(path: Path) -> str:
+    """ファイルの SHA-256（16進）を返す。"""
     digest = hashlib.sha256()
     with path.open("rb") as file_obj:
         while True:
@@ -22,12 +25,14 @@ def _sha256_hex(path: Path) -> str:
 
 
 def _normalize_sql(sql: str) -> str:
+    """SQL定義を空白差分に頑健な比較用文字列へ正規化する。"""
     return " ".join((sql or "").lower().split())
 
 
 @pytest.mark.required
 @pytest.mark.full
 def test_generated_sqlite_integrity_and_constraints(artifact_paths: dict):
+    """PRAGMA と sqlite_master で生成SQLiteの必須要件を検証する。"""
     sqlite_path: Path = artifact_paths["sqlite_path"]
     assert sqlite_path.exists(), f"SQLite が存在しません: {sqlite_path}"
 
@@ -69,6 +74,7 @@ def test_generated_sqlite_integrity_and_constraints(artifact_paths: dict):
 @pytest.mark.required
 @pytest.mark.full
 def test_latest_json_integrity(artifact_paths: dict):
+    """latest.json の必須キーとハッシュ/サイズ整合を検証する。"""
     latest_json_path: Path = artifact_paths["latest_json_path"]
     sqlite_path: Path = artifact_paths["sqlite_path"]
     manifest: dict = artifact_paths["manifest"]
@@ -88,6 +94,7 @@ def test_latest_json_integrity(artifact_paths: dict):
 @pytest.mark.required
 @pytest.mark.full
 def test_chart_id_stability_against_baseline(baseline_sqlite_path: Path, artifact_paths: dict):
+    """baseline との比較で chart_id 永続性を検証する。"""
     sqlite_path: Path = artifact_paths["sqlite_path"]
     summary = validate_chart_id_stability(
         old_sqlite_path=str(baseline_sqlite_path),

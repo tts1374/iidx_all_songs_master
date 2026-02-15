@@ -1,3 +1,5 @@
+"""テスト共通fixture（成果物とbaseline解決）を定義する。"""
+
 from __future__ import annotations
 
 import json
@@ -12,15 +14,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.github_release import download_asset, find_asset_by_name, get_latest_release
+from src.github_release import (  # pylint: disable=wrong-import-position
+    download_asset,
+    find_asset_by_name,
+    get_latest_release,
+)
 
 
 def _read_manifest(path: Path) -> dict:
+    """`latest.json` を読み込んで辞書で返す。"""
     with path.open("r", encoding="utf-8") as file_obj:
         return json.load(file_obj)
 
 
 def _resolve_local_artifacts() -> dict | None:
+    """作業ディレクトリ直下の `latest.json` / SQLite を解決する。"""
     latest_json_path = Path("latest.json")
     if not latest_json_path.exists():
         return None
@@ -43,6 +51,7 @@ def _resolve_local_artifacts() -> dict | None:
 
 
 def _resolve_repo() -> tuple[str, str]:
+    """settings.yaml から `github.owner` / `github.repo` を取得する。"""
     settings = yaml.safe_load(Path("settings.yaml").read_text(encoding="utf-8"))
     github_cfg = settings.get("github", {})
     owner = github_cfg.get("owner")
@@ -53,6 +62,7 @@ def _resolve_repo() -> tuple[str, str]:
 
 
 def _download_latest_artifacts(target_dir: Path) -> dict:
+    """最新リリースから `latest.json` と SQLite をダウンロードする。"""
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
         raise RuntimeError("GITHUB_TOKEN が未設定です")
@@ -93,6 +103,7 @@ def _download_latest_artifacts(target_dir: Path) -> dict:
 
 @pytest.fixture(scope="session")
 def artifact_paths(tmp_path_factory: pytest.TempPathFactory) -> dict:
+    """テスト対象成果物パスを返す（ローカル優先、無ければ最新リリース）。"""
     local = _resolve_local_artifacts()
     if local:
         return local
@@ -100,14 +111,16 @@ def artifact_paths(tmp_path_factory: pytest.TempPathFactory) -> dict:
     try:
         target_dir = tmp_path_factory.mktemp("downloaded_artifacts")
         return _download_latest_artifacts(target_dir)
-    except Exception as exc:
+    except (RuntimeError, OSError, ValueError, KeyError, TypeError) as exc:
         if os.environ.get("CI"):
             pytest.fail(f"成果物を解決できません: {exc}")
         pytest.skip(f"成果物を解決できないためスキップ: {exc}")
+    raise AssertionError("unreachable")
 
 
 @pytest.fixture(scope="session")
 def baseline_sqlite_path() -> Path:
+    """chart_id 比較用 baseline SQLite パスを返す。"""
     baseline = os.environ.get("BASELINE_SQLITE_PATH")
     if baseline:
         path = Path(baseline)
@@ -120,3 +133,4 @@ def baseline_sqlite_path() -> Path:
         pytest.fail("CIでは BASELINE_SQLITE_PATH が必須です")
 
     pytest.skip("baseline SQLite が未指定のためスキップ")
+    raise AssertionError("unreachable")
