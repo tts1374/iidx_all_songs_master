@@ -1,16 +1,28 @@
-name: Build Song Master DB
+name: Song Master CI
 
-on:
-  workflow_dispatch:
+"on":
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   schedule:
-    # 毎月1日 03:00 JST（UTC 18:00前日）
-    - cron: "0 18 * * *"
+    # 毎週日曜 18:00 UTC (月曜 03:00 JST)
+    - cron: "0 18 * * 0"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "成果物を公開する（手動実行時のみ）"
+        required: false
+        default: false
+        type: boolean
+
 permissions:
   contents: write
-jobs:
-  build:
-    runs-on: ubuntu-latest
 
+jobs:
+  pr-lightweight:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,9 +37,144 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run builder
+      - name: Run lightweight tests
+        run: |
+          pytest -q -m "light"
+
+  full-validate:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download baseline sqlite from latest release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import yaml
+          from src.github_release import get_latest_release, find_asset_by_name, download_asset
+
+          settings = yaml.safe_load(pathlib.Path("settings.yaml").read_text(encoding="utf-8"))
+          owner = settings["github"]["owner"]
+          repo = settings["github"]["repo"]
+          token = os.environ["GITHUB_TOKEN"]
+
+          release = get_latest_release(f"{owner}/{repo}", token)
+          if release is None:
+              raise RuntimeError("baseline取得失敗: latest release が存在しません")
+
+          out_dir = pathlib.Path("baseline")
+          out_dir.mkdir(parents=True, exist_ok=True)
+
+          latest_asset = find_asset_by_name(release, "latest.json")
+          if latest_asset is None:
+              raise RuntimeError("baseline取得失敗: latest.json が存在しません")
+          latest_path = out_dir / "latest.json"
+          download_asset(latest_asset, str(latest_path), token=token)
+
+          manifest = json.loads(latest_path.read_text(encoding="utf-8"))
+          file_name = manifest.get("file_name")
+          if not file_name:
+              raise RuntimeError("baseline取得失敗: latest.json に file_name がありません")
+
+          sqlite_asset = find_asset_by_name(release, file_name)
+          if sqlite_asset is None:
+              raise RuntimeError(f"baseline取得失敗: sqlite asset が存在しません: {file_name}")
+
+          baseline_sqlite = out_dir / "baseline.sqlite"
+          download_asset(sqlite_asset, str(baseline_sqlite), token=token)
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write(f"BASELINE_SQLITE_PATH={baseline_sqlite.resolve()}\\n")
+          PY
+
+      - name: Disable publish during verification phase
+        run: |
+          python - <<'PY'
+          import pathlib
+          import yaml
+
+          settings_path = pathlib.Path("settings.yaml")
+          settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+          settings.setdefault("github", {})["upload_to_release"] = False
+          settings_path.write_text(yaml.safe_dump(settings, allow_unicode=True, sort_keys=False), encoding="utf-8")
+          PY
+
+      - name: Build artifacts (no publish)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-            python main.py
+          python main.py
+
+      - name: Run full tests
+        env:
+          CI: "true"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASELINE_SQLITE_PATH: ${{ env.BASELINE_SQLITE_PATH }}
+        run: |
+          pytest -q -m "full"
+
+      - name: Publish artifacts to latest release
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import yaml
+          from src.github_release import upload_files_to_latest_release
+
+          settings = yaml.safe_load(pathlib.Path("settings.yaml").read_text(encoding="utf-8"))
+          owner = settings["github"]["owner"]
+          repo = settings["github"]["repo"]
+
+          latest_path = pathlib.Path("latest.json")
+          if not latest_path.exists():
+              raise RuntimeError("公開失敗: latest.json が存在しません")
+
+          manifest = json.loads(latest_path.read_text(encoding="utf-8"))
+          sqlite_name = manifest.get("file_name")
+          if not sqlite_name:
+              raise RuntimeError("公開失敗: latest.json に file_name がありません")
+
+          sqlite_path = pathlib.Path(sqlite_name)
+          if not sqlite_path.exists():
+              raise RuntimeError(f"公開失敗: SQLite が存在しません: {sqlite_name}")
+
+          upload_files_to_latest_release(
+              repo=f"{owner}/{repo}",
+              token=__import__("os").environ["GITHUB_TOKEN"],
+              file_paths=[str(sqlite_path), str(latest_path)],
+          )
+          PY
+
+      - name: Notify weekly failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python - <<'PY'
+          import os
+          from src.discord_notify import send_discord_message
+
+          webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+          if webhook:
+              send_discord_message(webhook, "song master weekly full validation failed")
+          PY
