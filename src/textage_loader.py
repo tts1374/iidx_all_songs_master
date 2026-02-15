@@ -1,4 +1,5 @@
-"""Textageから楽曲データを取得するモジュール。"""
+"""Textage から楽曲テーブルを取得・整形するモジュール。"""
+import hashlib
 import json
 import re
 import requests
@@ -27,7 +28,7 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
 
     m = re.search(rf"{varname}\s*=\s*\{{", js_text)
     if not m:
-        raise RuntimeError(f"{varname} not found in js")
+        raise RuntimeError(f"{varname} が JS 内に見つかりません")
 
     start = m.start()
     # varname= の直後の '{' の位置を特定し、対応する '}' を見つけてブロックを抜き出す
@@ -148,19 +149,20 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
         raise RuntimeError(f"json parse failed for {varname}: {e}") from e
 
 
-def fetch_textage_tables() -> tuple[dict, dict, dict]:
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def fetch_textage_tables_with_hashes() -> tuple[dict, dict, dict, dict[str, str]]:
     """
-    Textageからゲーム曲のマスターデータを取得する関数
-    3つの外部URLからHTTP GETリクエストを実行し、
-    JavaScript オブジェクト形式で記述されたテーブルデータを抽出して返す。
+    Textage テーブルを取得し、解析結果とソースハッシュを返す。
+
     Returns:
-        tuple[dict, dict, dict]: 以下の3つの辞書を含むタプル
-            - titletbl (dict): 曲のタイトル情報を格納した辞書
-            - datatbl (dict): 曲のスコアデータ情報を格納した辞書
-            - actbl (dict): 設定活動データを格納した辞書
-    Raises:
-        requests.exceptions.HTTPError: HTTP リクエストが失敗した場合
-        requests.exceptions.Timeout: リクエストがタイムアウトした場合
+        tuple:
+            - titletbl
+            - datatbl
+            - actbl
+            - source_hashes（ファイル名をキーにした sha256 16進文字列）
     """
     r1 = requests.get(TITLE_URL, timeout=30)
     r1.raise_for_status()
@@ -175,4 +177,28 @@ def fetch_textage_tables() -> tuple[dict, dict, dict]:
     datatbl = _extract_js_object(r2.text, "datatbl")
     actbl = _extract_js_object(r3.text, "actbl")
 
+    source_hashes = {
+        "titletbl.js": _sha256_hex(r1.content),
+        "datatbl.js": _sha256_hex(r2.content),
+        "actbl.js": _sha256_hex(r3.content),
+    }
+
+    return titletbl, datatbl, actbl, source_hashes
+
+
+def fetch_textage_tables() -> tuple[dict, dict, dict]:
+    """
+    Textageからゲーム曲のマスターデータを取得する関数
+    3つの外部URLからHTTP GETリクエストを実行し、
+    JavaScript オブジェクト形式で記述されたテーブルデータを抽出して返す。
+    Returns:
+        tuple[dict, dict, dict]: 以下の3つの辞書を含むタプル
+            - titletbl (dict): 曲のタイトル情報を格納した辞書
+            - datatbl (dict): 曲のスコアデータ情報を格納した辞書
+            - actbl (dict): 設定活動データを格納した辞書
+    Raises:
+        requests.exceptions.HTTPError: HTTP リクエストが失敗した場合
+        requests.exceptions.Timeout: リクエストがタイムアウトした場合
+    """
+    titletbl, datatbl, actbl, _ = fetch_textage_tables_with_hashes()
     return titletbl, datatbl, actbl

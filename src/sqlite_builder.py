@@ -1,70 +1,104 @@
 """
-SQLiteデータベース(song_master.sqlite)の構築と更新を行うモジュール。
-
-Textageの以下3ファイルから取得したデータを元に、SQLiteへ登録・更新を行う。
-
-- titletbl.js : 曲情報（タイトル/アーティスト/ジャンル/version/textage_id）
-- datatbl.js  : ノーツ数情報
-- actbl.js    : 譜面レベル情報、AC/INFINITAS収録フラグ
-
-本モジュールは、曲情報(musicテーブル)と譜面情報(chartテーブル)を
-Upsert(存在すれば更新、無ければ追加)することでDBを最新状態に保つ。
-
-追加仕様:
-- latest release の sqlite をDLして利用可能にする
-- 更新開始前に music.is_ac_active / is_inf_active を全件0にリセットし、
-  Textageで取得できた曲のみ再度フラグを立てる（Textageに無い曲は未収録扱い）
-
-想定仕様:
-- musicの同一判定は textage_id を用いる
-- chartの同一判定は (music_id, play_style, difficulty) を用いる
-- actblの譜面レベル値は16進数文字列であり、intに変換して保持する
+SQLite 楽曲マスターデータベースを構築・更新するモジュール。
 """
 
-import sqlite3
-import re
+from __future__ import annotations
+
 import html
 import os
-import requests
-from datetime import datetime, timezone, timedelta
+import re
+import sqlite3
+import unicodedata
+from datetime import datetime, timedelta, timezone
 
+import requests
 
 TAG_RE = re.compile(r"<[^>]+>")
+SPACE_RE = re.compile(r"\s+")
+
 JST = timezone(timedelta(hours=9), "JST")
+
+# 検索互換性に影響するため、置換定義はこの1箇所で管理する。
+TITLE_SEARCH_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("ä", "a"),
+    ("ö", "o"),
+    ("ü", "u"),
+    ("ß", "ss"),
+    ("æ", "ae"),
+    ("œ", "oe"),
+    ("ø", "o"),
+    ("å", "a"),
+    ("ç", "c"),
+    ("ñ", "n"),
+    ("á", "a"),
+    ("à", "a"),
+    ("â", "a"),
+    ("ã", "a"),
+    ("é", "e"),
+    ("è", "e"),
+    ("ê", "e"),
+    ("ë", "e"),
+    ("í", "i"),
+    ("ì", "i"),
+    ("î", "i"),
+    ("ï", "i"),
+    ("ó", "o"),
+    ("ò", "o"),
+    ("ô", "o"),
+    ("õ", "o"),
+    ("ú", "u"),
+    ("ù", "u"),
+    ("û", "u"),
+    ("ý", "y"),
+    ("ÿ", "y"),
+)
 
 
 def normalize_textage_string(s: str) -> str:
-    """
-    Textage由来の文字列をDB登録用に正規化する。
-
-    対応内容:
-    - HTML文字実体参照のデコード (例: &#332; -> Ō)
-    - HTMLタグ除去 (例: <br>, <span ...> 等)
-    - 空白の正規化
-    """
+    """Textage由来文字列を表示用に正規化する。"""
     if s is None:
         return ""
 
-    s = str(s)
+    value = str(s)
+    value = html.unescape(value)
+    value = TAG_RE.sub("", value)
+    value = SPACE_RE.sub(" ", value).strip()
+    return value
 
-    # 文字実体参照をデコード
-    s = html.unescape(s)
 
-    # HTMLタグ除去
-    s = TAG_RE.sub("", s)
+def normalize_title_search_key(title: str) -> str:
+    """
+    検索用タイトルキーを正規化する。
 
-    # 空白正規化
-    s = re.sub(r"\s+", " ", s).strip()
+    仕様固定順序:
+    1) 小文字化
+    2) trim
+    3) 置換テーブル
+    4) NFD 分解 + 結合文字除去
+    5) 連続空白圧縮
+    """
+    if title is None:
+        value = ""
+    else:
+        value = str(title)
 
-    return s
+    value = value.lower()
+    value = value.strip()
+
+    for source, target in TITLE_SEARCH_REPLACEMENTS:
+        value = value.replace(source, target)
+
+    value = unicodedata.normalize("NFD", value)
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    value = SPACE_RE.sub(" ", value)
+    return value
 
 
 def now_iso() -> str:
-    """現在のJST時刻をISO 8601形式で返す。"""
+    """現在のJST時刻を ISO 8601 形式で返す。"""
     return datetime.now(JST).isoformat()
 
 
-# chart登録対象の譜面種別一覧。
 CHART_TYPES = [
     # (type, play_style, difficulty, act_index)
     (1, "SP", "BEGINNER", 3),
@@ -87,65 +121,89 @@ def download_latest_sqlite_from_release(
     asset_name: str = "song_master.sqlite",
 ) -> dict:
     """
-    GitHub Releases の latest release から sqlite asset をダウンロードする。
-
-    Returns:
-        bool: ダウンロード成功ならTrue。latestが無い/assetが無い場合はFalse。
+    最新リリースから指定名のアセットをダウンロードする。
     """
     url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
 
-    headers = {
-        "Accept": "application/vnd.github+json",
-    }
+    headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    r = requests.get(url, headers=headers, timeout=30)
-
-    # releaseが無い場合
-    if r.status_code == 404:
+    response = requests.get(url, headers=headers, timeout=30)
+    if response.status_code == 404:
         return {"downloaded": False, "asset_updated_at": None}
+    response.raise_for_status()
+    release = response.json()
 
-    r.raise_for_status()
-    data = r.json()
-
-    assets = data.get("assets", [])
     target = None
-    for a in assets:
-        if a.get("name") == asset_name:
-            target = a
+    for asset in release.get("assets", []):
+        if asset.get("name") == asset_name:
+            target = asset
             break
 
-    if not target:
+    if not target or not target.get("browser_download_url"):
         return {"downloaded": False, "asset_updated_at": None}
 
-    download_url = target.get("browser_download_url")
-    if not download_url:
-        return {"downloaded": False, "asset_updated_at": None}
+    download_headers = {}
+    if token:
+        download_headers["Authorization"] = f"Bearer {token}"
 
-    r2 = requests.get(download_url, timeout=60)
-    r2.raise_for_status()
+    asset_response = requests.get(
+        target["browser_download_url"], headers=download_headers, timeout=60
+    )
+    asset_response.raise_for_status()
 
     os.makedirs(os.path.dirname(sqlite_path) or ".", exist_ok=True)
-    with open(sqlite_path, "wb") as f:
-        f.write(r2.content)
+    with open(sqlite_path, "wb") as file_obj:
+        file_obj.write(asset_response.content)
 
-    return {
-        "downloaded": True,
-        "asset_updated_at": target.get("updated_at"),
-    }
+    return {"downloaded": True, "asset_updated_at": target.get("updated_at")}
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    )
+    return cur.fetchone() is not None
+
+
+def _column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    cur = conn.cursor()
+    cur.execute(f"PRAGMA table_info({table_name});")
+    rows = cur.fetchall()
+    return any(row[1] == column_name for row in rows)
+
+
+def _backfill_title_search_keys(conn: sqlite3.Connection):
+    cur = conn.cursor()
+    cur.execute("SELECT music_id, title, title_search_key FROM music;")
+
+    updates: list[tuple[str, int]] = []
+    for music_id, title, title_search_key in cur.fetchall():
+        if title_search_key is None or title_search_key == "":
+            updates.append((normalize_title_search_key(title), music_id))
+
+    if updates:
+        cur.executemany(
+            "UPDATE music SET title_search_key = ? WHERE music_id = ?",
+            updates,
+        )
 
 
 def ensure_schema(conn: sqlite3.Connection):
-    """DBスキーマを初期化する。"""
+    """DBスキーマの作成・移行を行う。"""
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS music (
         music_id INTEGER PRIMARY KEY AUTOINCREMENT,
         textage_id TEXT NOT NULL UNIQUE,
         version TEXT NOT NULL,
         title TEXT NOT NULL,
+        title_search_key TEXT NOT NULL,
         artist TEXT NOT NULL,
         genre TEXT NOT NULL,
         is_ac_active INTEGER NOT NULL,
@@ -154,9 +212,11 @@ def ensure_schema(conn: sqlite3.Connection):
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
-    """)
+    """
+    )
 
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS chart (
         chart_id INTEGER PRIMARY KEY AUTOINCREMENT,
         music_id INTEGER NOT NULL,
@@ -171,25 +231,39 @@ def ensure_schema(conn: sqlite3.Connection):
         UNIQUE(music_id, play_style, difficulty),
         FOREIGN KEY(music_id) REFERENCES music(music_id)
     );
-    """)
+    """
+    )
 
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS meta (
         schema_version TEXT NOT NULL,
         asset_updated_at TEXT NOT NULL,
         generated_at TEXT NOT NULL
     );
-    """)
-    
-    # インデックス追加: chart(music_id, is_active)
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_chart_music_active ON chart(music_id, is_active);")
+    """
+    )
 
-    # インデックス追加: chart(play_style, difficulty, level, is_active)
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_chart_filter ON chart(play_style, difficulty, level, is_active);")
+    if _table_exists(conn, "music") and not _column_exists(conn, "music", "title_search_key"):
+        cur.execute(
+            "ALTER TABLE music ADD COLUMN title_search_key TEXT NOT NULL DEFAULT ''"
+        )
 
-    # インデックス追加: chart(is_active, notes)
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_chart_notes_active ON chart(is_active, notes);")
-    
+    _backfill_title_search_keys(conn)
+
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chart_music_active ON chart(music_id, is_active);"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chart_filter ON chart(play_style, difficulty, level, is_active);"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chart_notes_active ON chart(is_active, notes);"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_music_title_search_key ON music(title_search_key);"
+    )
+
     conn.commit()
 
 
@@ -209,21 +283,19 @@ def upsert_meta(
 
 
 def reset_all_music_active_flags(conn: sqlite3.Connection):
-    """
-    musicテーブルの収録フラグを全件0に戻す。
-
-    Textage取得結果に無い曲は未収録扱いにしたいので、
-    build開始前に必ず呼ぶ。
-    """
+    """取り込み前に収録フラグを全件リセットする。"""
     cur = conn.cursor()
     now = now_iso()
 
-    cur.execute("""
+    cur.execute(
+        """
     UPDATE music SET
         is_ac_active = 0,
         is_inf_active = 0,
         updated_at = ?
-    """, (now,))
+    """,
+        (now,),
+    )
 
     conn.commit()
 
@@ -236,35 +308,49 @@ def upsert_music(
     artist: str,
     genre: str,
     is_ac_active: int,
-    is_inf_active: int
+    is_inf_active: int,
 ) -> int:
-    """musicテーブルに対してUpsertを行う。"""
+    """music 1件を Upsert する。"""
     cur = conn.cursor()
     now = now_iso()
+    title_search_key = normalize_title_search_key(title)
 
-    cur.execute("SELECT music_id, created_at FROM music WHERE textage_id = ?", (textage_id,))
+    cur.execute("SELECT music_id FROM music WHERE textage_id = ?", (textage_id,))
     row = cur.fetchone()
 
     if row is None:
-        cur.execute("""
+        cur.execute(
+            """
         INSERT INTO music (
-            textage_id, version, title, artist, genre,
+            textage_id, version, title, title_search_key, artist, genre,
             is_ac_active, is_inf_active,
             last_seen_at, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            textage_id, version, title, artist, genre,
-            is_ac_active, is_inf_active,
-            now, now, now
-        ))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                textage_id,
+                version,
+                title,
+                title_search_key,
+                artist,
+                genre,
+                is_ac_active,
+                is_inf_active,
+                now,
+                now,
+                now,
+            ),
+        )
         return cur.lastrowid
 
     music_id = row[0]
-    cur.execute("""
+    cur.execute(
+        """
     UPDATE music SET
         version = ?,
         title = ?,
+        title_search_key = ?,
         artist = ?,
         genre = ?,
         is_ac_active = ?,
@@ -272,12 +358,20 @@ def upsert_music(
         last_seen_at = ?,
         updated_at = ?
     WHERE textage_id = ?
-    """, (
-        version, title, artist, genre,
-        is_ac_active, is_inf_active,
-        now, now,
-        textage_id
-    ))
+    """,
+        (
+            version,
+            title,
+            title_search_key,
+            artist,
+            genre,
+            is_ac_active,
+            is_inf_active,
+            now,
+            now,
+            textage_id,
+        ),
+    )
     return music_id
 
 
@@ -288,34 +382,47 @@ def upsert_chart(
     difficulty: str,
     level: int,
     notes: int,
-    is_active: int
+    is_active: int,
 ):
-    """chartテーブルに対してUpsertを行う。"""
+    """chart 1件を Upsert する。"""
     cur = conn.cursor()
     now = now_iso()
 
-    cur.execute("""
+    cur.execute(
+        """
     SELECT chart_id FROM chart
     WHERE music_id = ? AND play_style = ? AND difficulty = ?
-    """, (music_id, play_style, difficulty))
+    """,
+        (music_id, play_style, difficulty),
+    )
     row = cur.fetchone()
 
     if row is None:
-        cur.execute("""
+        cur.execute(
+            """
         INSERT INTO chart (
             music_id, play_style, difficulty,
             level, notes, is_active,
             last_seen_at, created_at, updated_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            music_id, play_style, difficulty,
-            level, notes, is_active,
-            now, now, now
-        ))
+        """,
+            (
+                music_id,
+                play_style,
+                difficulty,
+                level,
+                notes,
+                is_active,
+                now,
+                now,
+                now,
+            ),
+        )
         return
 
-    cur.execute("""
+    cur.execute(
+        """
     UPDATE chart SET
         level = ?,
         notes = ?,
@@ -323,11 +430,18 @@ def upsert_chart(
         last_seen_at = ?,
         updated_at = ?
     WHERE music_id = ? AND play_style = ? AND difficulty = ?
-    """, (
-        level, notes, is_active,
-        now, now,
-        music_id, play_style, difficulty
-    ))
+    """,
+        (
+            level,
+            notes,
+            is_active,
+            now,
+            now,
+            music_id,
+            play_style,
+            difficulty,
+        ),
+    )
 
 
 def build_or_update_sqlite(
@@ -340,10 +454,7 @@ def build_or_update_sqlite(
     asset_updated_at: str | None = None,
 ) -> dict:
     """
-    Textageデータを元にSQLite DBを生成または更新する。
-
-    reset_flags=True の場合、build開始前に
-    music.is_ac_active / is_inf_active を全件0にする。
+    Textage テーブルから SQLite DB を構築または更新する。
     """
     conn = sqlite3.connect(sqlite_path)
     conn.row_factory = sqlite3.Row
@@ -363,13 +474,7 @@ def build_or_update_sqlite(
             continue
 
         version_raw = str(row[0])
-
-        # versionの -35 → SS は適用済み
-        if version_raw == "-35":
-            version = "SS"
-        else:
-            version = version_raw
-
+        version = "SS" if version_raw == "-35" else version_raw
         textage_id = str(row[1])
 
         genre = normalize_textage_string(row[3])
@@ -382,11 +487,7 @@ def build_or_update_sqlite(
                 title = f"{title} {subtitle}"
 
         value = actbl[tag][0]
-        if isinstance(value, int):
-            flags = value
-        else:
-            flags = int(value, 16)
-
+        flags = value if isinstance(value, int) else int(value, 16)
         is_ac_active = 1 if (flags & 0x01) else 0
         is_inf_active = 1 if (flags & 0x02) else 0
 
@@ -398,29 +499,24 @@ def build_or_update_sqlite(
             artist=artist,
             genre=genre,
             is_ac_active=is_ac_active,
-            is_inf_active=is_inf_active
+            is_inf_active=is_inf_active,
         )
         music_processed += 1
 
-        for t, play_style, difficulty, _ in CHART_TYPES:
-            notes = datatbl[tag][t]
-            lv_hex = actbl[tag][t * 2 + 1]
-
-            if isinstance(lv_hex, int):
-                lv_int = lv_hex
-            else:
-                lv_int = int(str(lv_hex), 16)
-
+        for chart_type, play_style, difficulty, _ in CHART_TYPES:
+            notes = datatbl[tag][chart_type]
+            lv_hex = actbl[tag][chart_type * 2 + 1]
+            lv_int = lv_hex if isinstance(lv_hex, int) else int(str(lv_hex), 16)
             is_active = 1 if lv_int > 0 else 0
 
             upsert_chart(
-                conn,
+                conn=conn,
                 music_id=music_id,
                 play_style=play_style,
                 difficulty=difficulty,
                 level=lv_int,
                 notes=int(notes),
-                is_active=is_active
+                is_active=is_active,
             )
             chart_processed += 1
 

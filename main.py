@@ -1,153 +1,286 @@
 """
-IIDX楽曲マスターデータ(SQLite)を生成・更新し、GitHub Releasesへ配布するエントリーポイント。
-
-本スクリプトは settings.yaml を読み込み、Textageから取得した最新データを用いて
-SQLiteデータベース(song_master.sqlite)を更新する。
-
-主な処理フロー:
-1. settings.yaml 読み込み
-2. GitHub Releases の latest から既存sqliteを取得（存在すれば）
-3. Textageから最新テーブル(titletbl/datatbl/actbl)を取得
-4. sqliteをUpsert更新（既存データとの整合性を維持）
-5. 必要に応じてGitHub Releasesへアップロード
-6. Discord Webhookへ成功/失敗通知
-
-必要な環境変数:
-- GITHUB_TOKEN: GitHub APIアクセス用トークン
-- DISCORD_WEBHOOK_URL: Discord通知先（任意）
+SQLite 楽曲マスター成果物を生成し、GitHub Releases に配布するエントリーポイント。
 """
 
+from __future__ import annotations
+
+import json
 import os
-from datetime import datetime, timezone, timedelta
+import shutil
 import sys
+import tempfile
 import traceback
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
 import yaml
 
-from src.textage_loader import fetch_textage_tables
-from src.sqlite_builder import build_or_update_sqlite, download_latest_sqlite_from_release
-from src.github_release import upload_sqlite_to_latest_release
+from src.build_validation import (
+    build_latest_manifest,
+    utc_now_iso,
+    validate_chart_id_stability,
+    validate_db_schema_and_data,
+    validate_latest_manifest,
+    write_latest_manifest,
+)
 from src.discord_notify import send_discord_message
+from src.github_release import (
+    download_asset,
+    find_asset_by_name,
+    get_latest_release,
+    upload_files_to_latest_release,
+)
+from src.sqlite_builder import build_or_update_sqlite
+from src.textage_loader import fetch_textage_tables_with_hashes
 
 JST = timezone(timedelta(hours=9), "JST")
+LATEST_MANIFEST_NAME = "latest.json"
 
 
 def now_iso() -> str:
-    """
-    現在のJST時刻をISO 8601形式の文字列で取得する。
-
-    Returns:
-        str: ISO 8601形式でフォーマットされた現在のJST時刻文字列。
-    """
     return datetime.now(JST).isoformat()
 
 
 def load_settings(path: str = "settings.yaml") -> dict:
-    """
-    YAML形式の設定ファイル(settings.yaml)を読み込み、辞書として返す。
+    with open(path, "r", encoding="utf-8") as file_obj:
+        return yaml.safe_load(file_obj)
 
-    Args:
-        path (str): 設定ファイルのパス。デフォルトは "settings.yaml"。
 
-    Returns:
-        dict: YAMLをパースした設定データ。
-              読み込みに成功した場合、トップレベルはdictとなる。
+def parse_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
-    Raises:
-        FileNotFoundError: 指定されたファイルが存在しない場合。
-        yaml.YAMLError: YAMLとしてパースできない場合。
-    """
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+
+def has_same_textage_source_hashes(
+    previous_hashes: dict[str, str] | None,
+    current_hashes: dict[str, str],
+) -> bool:
+    if not previous_hashes:
+        return False
+
+    required_keys = ("titletbl.js", "datatbl.js", "actbl.js")
+    for key in required_keys:
+        if previous_hashes.get(key) != current_hashes.get(key):
+            return False
+    return True
+
+
+def resolve_artifact_paths(
+    output_db_path: str,
+    latest_manifest_name: str,
+    generated_utc: datetime,
+) -> dict:
+    output_base = Path(output_db_path)
+    output_dir = output_base.parent if str(output_base.parent) not in {"", "."} else Path(".")
+    stem = output_base.stem if output_base.suffix else output_base.name
+    version = generated_utc.strftime("%Y-%m-%d")
+    sqlite_file_name = f"{stem}_{version}.sqlite"
+
+    sqlite_path = output_dir / sqlite_file_name
+    latest_json_path = output_dir / latest_manifest_name
+
+    return {
+        "output_dir": str(output_dir),
+        "sqlite_path": str(sqlite_path),
+        "sqlite_file_name": sqlite_file_name,
+        "latest_json_path": str(latest_json_path),
+    }
+
+
+def download_previous_sqlite_from_release(
+    repo_full: str,
+    token: str,
+    working_dir: str,
+    latest_manifest_name: str,
+    fallback_asset_name: str | None,
+    required: bool,
+) -> dict | None:
+    release = get_latest_release(repo_full, token)
+    if release is None:
+        if required:
+            raise RuntimeError("最新リリースが見つからず前回 SQLite を取得できません")
+        return None
+
+    sqlite_asset_name = None
+    previous_manifest = None
+
+    manifest_asset = find_asset_by_name(release, latest_manifest_name)
+    if manifest_asset:
+        manifest_path = os.path.join(working_dir, latest_manifest_name)
+        download_asset(manifest_asset, manifest_path, token=token)
+        with open(manifest_path, "r", encoding="utf-8") as file_obj:
+            previous_manifest = json.load(file_obj)
+        sqlite_asset_name = previous_manifest.get("file_name")
+
+    if not sqlite_asset_name and fallback_asset_name:
+        sqlite_asset_name = fallback_asset_name
+
+    if not sqlite_asset_name:
+        if required:
+            raise RuntimeError(
+                "最新リリースから前回 SQLite のアセット名を特定できません"
+            )
+        return None
+
+    sqlite_asset = find_asset_by_name(release, sqlite_asset_name)
+    if sqlite_asset is None:
+        if required:
+            raise RuntimeError(
+                f"最新リリースに前回 SQLite アセットがありません: {sqlite_asset_name}"
+            )
+        return None
+
+    previous_sqlite_path = os.path.join(working_dir, "previous_release.sqlite")
+    download_asset(sqlite_asset, previous_sqlite_path, token=token)
+
+    return {
+        "sqlite_path": previous_sqlite_path,
+        "asset_name": sqlite_asset_name,
+        "asset_updated_at": sqlite_asset.get("updated_at"),
+        "manifest": previous_manifest,
+    }
 
 
 def main():
-    """
-    song_master.sqlite を生成・更新し、GitHub Releasesへ配布するメイン処理。
-
-    settings.yaml の内容に従い、以下を実行する:
-    - GitHub Releases の latest release から既存sqliteをダウンロード（存在すれば）
-    - Textageから最新テーブルデータを取得
-    - SQLiteへUpsert更新（既存レコードを維持しつつ更新）
-    - upload_to_release が true の場合は latest release へアップロード
-    - Discord Webhook が指定されている場合は成功/失敗を通知
-
-    settings.yaml の想定キー:
-    - output_db_path: 出力sqliteのパス
-    - github.owner: GitHubオーナー名
-    - github.repo: GitHubリポジトリ名
-    - github.upload_to_release: アップロード有無
-    - github.asset_name: release asset 名（DL対象名）
-
-    必要な環境変数:
-    - GITHUB_TOKEN: GitHub APIアクセストークン
-    - DISCORD_WEBHOOK_URL: Discord通知用Webhook URL（任意）
-
-    Raises:
-        Exception: 内部処理で例外が発生した場合はそのまま再送出する。
-                   失敗時はDiscord通知（設定されていれば）を行う。
-    """
     try:
         settings = load_settings("settings.yaml")
 
-        sqlite_path = settings.get("output_db_path", "song_master.sqlite")
+        output_db_path = settings.get("output_db_path", "song_master.sqlite")
+        schema_version = str(settings.get("schema_version", "1"))
+        chart_id_missing_policy = str(settings.get("chart_id_missing_policy", "error"))
 
         github_cfg = settings.get("github", {})
         owner = github_cfg.get("owner")
         repo = github_cfg.get("repo")
-        upload_to_release = github_cfg.get("upload_to_release", False)
-        asset_name = github_cfg.get("asset_name", "song_master.sqlite")
-        schema_version = settings.get("schema_version", "1")
+        upload_to_release = parse_bool(github_cfg.get("upload_to_release", False))
+        fallback_asset_name = github_cfg.get("asset_name", "song_master.sqlite")
+        require_previous_release = parse_bool(
+            github_cfg.get("require_previous_release"),
+            default=parse_bool(os.environ.get("CI"), default=False),
+        )
 
         if not owner or not repo:
-            raise RuntimeError("settings.yaml: github.owner / github.repo が未設定です")
+            raise RuntimeError("settings.yaml: github.owner / github.repo は必須です")
 
         token = os.environ["GITHUB_TOKEN"]
         discord_webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+        repo_full = f"{owner}/{repo}"
 
-        # 0. latest release から sqlite を取得（あれば）
-        download_info = download_latest_sqlite_from_release(
-            owner=owner,
-            repo=repo,
-            sqlite_path=sqlite_path,
-            token=token,
-            asset_name=asset_name,
+        artifacts = resolve_artifact_paths(
+            output_db_path=output_db_path,
+            latest_manifest_name=LATEST_MANIFEST_NAME,
+            generated_utc=datetime.now(timezone.utc),
         )
-        downloaded = download_info.get("downloaded", False)
-        asset_updated_at = download_info.get("asset_updated_at")
+        sqlite_path = artifacts["sqlite_path"]
+        latest_json_path = artifacts["latest_json_path"]
 
-        # 1. textage JS取得
-        titletbl, datatbl, actbl = fetch_textage_tables()
+        os.makedirs(os.path.dirname(sqlite_path) or ".", exist_ok=True)
 
-        # 2. SQLite更新
-        result = build_or_update_sqlite(
-            sqlite_path=sqlite_path,
-            titletbl=titletbl,
-            datatbl=datatbl,
-            actbl=actbl,
-            reset_flags=True,
-            schema_version=schema_version,
-            asset_updated_at=asset_updated_at,
-        )
-
-        # 3. GitHub Releasesへアップロード
-        if upload_to_release:
-            upload_sqlite_to_latest_release(
-                repo=f"{owner}/{repo}",
+        with tempfile.TemporaryDirectory() as working_dir:
+            previous_info = download_previous_sqlite_from_release(
+                repo_full=repo_full,
                 token=token,
-                sqlite_path=sqlite_path
+                working_dir=working_dir,
+                latest_manifest_name=LATEST_MANIFEST_NAME,
+                fallback_asset_name=fallback_asset_name,
+                required=require_previous_release,
             )
 
-        # 4. Discord通知（成功）
-        if discord_webhook:
-            msg = (
-                f"✅ song_master.sqlite 更新成功\n"
-                f"- downloaded_from_release: {downloaded}\n"
-                f"- music processed: {result['music_processed']}\n"
-                f"- chart processed: {result['chart_processed']}\n"
-                f"- ignored: {result['ignored']}\n"
-                f"- updated_at: {now_iso()}\n"
+            previous_sqlite_path = None
+            previous_asset_updated_at = None
+            previous_source_hashes = None
+            if previous_info:
+                previous_sqlite_path = previous_info["sqlite_path"]
+                previous_asset_updated_at = previous_info["asset_updated_at"]
+                previous_manifest = previous_info.get("manifest")
+                if isinstance(previous_manifest, dict):
+                    source_hashes = previous_manifest.get("source_hashes")
+                    if isinstance(source_hashes, dict):
+                        previous_source_hashes = source_hashes
+
+            titletbl, datatbl, actbl, source_hashes = fetch_textage_tables_with_hashes()
+
+            if has_same_textage_source_hashes(previous_source_hashes, source_hashes):
+                if discord_webhook:
+                    send_discord_message(
+                        discord_webhook,
+                        "\n".join(
+                            [
+                                "song master build をスキップしました",
+                                "- 理由: Textage ソースハッシュが未変更",
+                                f"- 時刻: {now_iso()}",
+                            ]
+                        ),
+                    )
+                print("SKIPPED: Textage ソースハッシュ未変更")
+                return
+
+            if previous_info:
+                shutil.copyfile(previous_sqlite_path, sqlite_path)
+            elif os.path.exists(sqlite_path):
+                os.remove(sqlite_path)
+
+            result = build_or_update_sqlite(
+                sqlite_path=sqlite_path,
+                titletbl=titletbl,
+                datatbl=datatbl,
+                actbl=actbl,
+                reset_flags=True,
+                schema_version=schema_version,
+                asset_updated_at=previous_asset_updated_at,
             )
-            send_discord_message(discord_webhook, msg)
+
+            validate_db_schema_and_data(sqlite_path)
+
+            if not previous_sqlite_path:
+                if require_previous_release:
+                    raise RuntimeError(
+                        "chart_id 検証には前回 SQLite が必要ですが取得できませんでした"
+                    )
+                chart_check = None
+            else:
+                chart_check = validate_chart_id_stability(
+                    old_sqlite_path=previous_sqlite_path,
+                    new_sqlite_path=sqlite_path,
+                    missing_policy=chart_id_missing_policy,
+                )
+
+        manifest = build_latest_manifest(
+            sqlite_path=sqlite_path,
+            schema_version=schema_version,
+            generated_at=utc_now_iso(),
+            source_hashes=source_hashes,
+        )
+        write_latest_manifest(latest_json_path, manifest)
+        validate_latest_manifest(latest_json_path, sqlite_path)
+
+        if upload_to_release:
+            upload_files_to_latest_release(
+                repo=repo_full,
+                token=token,
+                file_paths=[sqlite_path, latest_json_path],
+            )
+
+        if discord_webhook:
+            msg_lines = [
+                "song master build 成功",
+                f"- sqlite_file: {os.path.basename(sqlite_path)}",
+                f"- latest_manifest: {os.path.basename(latest_json_path)}",
+                f"- music_processed: {result['music_processed']}",
+                f"- chart_processed: {result['chart_processed']}",
+                f"- ignored: {result['ignored']}",
+                f"- chart_id_checked: {'yes' if chart_check else 'no'}",
+                f"- updated_at: {now_iso()}",
+            ]
+            if chart_check:
+                msg_lines.append(f"- shared_charts: {chart_check['shared_total']}")
+                msg_lines.append(f"- missing_in_new: {chart_check['missing_in_new_total']}")
+            send_discord_message(discord_webhook, "\n".join(msg_lines))
 
         print("SUCCESS")
 
@@ -157,11 +290,10 @@ def main():
 
         discord_webhook = os.environ.get("DISCORD_WEBHOOK_URL")
         if discord_webhook:
-            msg = (
-                f"❌ song_master.sqlite 更新失敗\n"
-                f"```{err[:1800]}```"
+            send_discord_message(
+                discord_webhook,
+                f"song master build 失敗\n```{err[:1800]}```",
             )
-            send_discord_message(discord_webhook, msg)
 
         raise
 

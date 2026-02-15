@@ -1,129 +1,228 @@
 # iidx_all_songs_master
 
-
-IIDXの楽曲マスターデータ（SQLite）を生成・更新し、GitHub Releases に配布するためのシステムです。
-
-本リポジトリの主目的は「プログラム」そのものではなく、生成物である `song_master.sqlite` を提供することです。  
-大会運営・エビデンス管理・リザルト集計など、IIDX楽曲情報を参照するシステムの共通マスタとして利用できます。
+beatmania IIDX の楽曲データを Textage から取得し、  
+大会・エビデンス管理システム等で利用するための  
+**曲マスタ SQLite を生成・配布するプロジェクト**です。
 
 ---
 
-## 生成物（配布物）
+# 概要
 
-### song_master.sqlite
+本リポジトリは以下を提供します。
 
-本システムが生成するSQLiteデータベースです。
-
-- 曲情報（タイトル、アーティスト、ジャンル、収録状況など）
-- 譜面情報（SP/DP、難易度、レベル、ノーツ数、譜面有効フラグ）
-
-を含みます。
-
----
-
-## データソース
-
-Textage の以下ファイルを取得してSQLiteへ反映します。
-
-- `titletbl.js` : 曲情報（タイトル/アーティスト/ジャンル/version/textage_id）
-- `datatbl.js`  : ノーツ数
-- `actbl.js`    : 譜面レベル / AC収録フラグ / INFINITAS収録フラグ
+- Textage からの楽曲情報取得
+- 正規化済み検索キー付き SQLite 生成
+- `chart_id` 永続保証
+- バージョン付き SQLite 出力
+- `latest.json` メタ生成
+- CI による整合性・互換性検証
 
 ---
 
-## DB仕様
+# 出力物
 
-### music テーブル（曲情報）
+生成される成果物は以下の2つです。
 
-| column | type | description |
-|--------|------|-------------|
-| music_id | INTEGER | 内部ID |
-| textage_id | TEXT | Textage恒久ID（ユニーク） |
-| version | TEXT | 収録バージョン（例: `33`, `SS`） |
-| title | TEXT | 曲名 |
-| artist | TEXT | アーティスト |
-| genre | TEXT | ジャンル |
-| is_ac_active | INTEGER | AC収録フラグ（0/1） |
-| is_inf_active | INTEGER | INFINITAS収録フラグ（0/1） |
-| last_seen_at | TEXT | Textage取得時に確認された最終日時 |
-| created_at | TEXT | 初回登録日時 |
-| updated_at | TEXT | 更新日時 |
+```text
+song_master_<version>.sqlite
+latest.json
+```
 
----
+## song_master_<version>.sqlite
 
-### chart テーブル（譜面情報）
+- バージョン付きファイル名（固定名上書きなし）
+- 読み取り専用前提
+- 既存キーに対する `chart_id` 永続保証
 
-| column | type | description |
-|--------|------|-------------|
-| chart_id | INTEGER | 内部ID |
-| music_id | INTEGER | music参照 |
-| play_style | TEXT | `SP` / `DP` |
-| difficulty | TEXT | `BEGINNER` / `NORMAL` / `HYPER` / `ANOTHER` / `LEGGENDARIA` |
-| level | INTEGER | 譜面レベル |
-| notes | INTEGER | ノーツ数 |
-| is_active | INTEGER | 譜面有効フラグ（0/1） |
-| last_seen_at | TEXT | Textage取得時に確認された最終日時 |
-| created_at | TEXT | 初回登録日時 |
-| updated_at | TEXT | 更新日時 |
+## latest.json
 
----
+例:
 
-## データ更新仕様
+```json
+{
+  "file_name": "song_master_2026-02-15.sqlite",
+  "schema_version": "33",
+  "generated_at": "2026-02-15T12:34:56Z",
+  "sha256": "xxxxxxxx",
+  "byte_size": 12345678,
+  "source_hashes": {
+    "titletbl.js": "xxxxxxxx",
+    "datatbl.js": "xxxxxxxx",
+    "actbl.js": "xxxxxxxx"
+  }
+}
+```
 
-本システムは毎回DBを作り直すのではなく、以下の動作で整合性を維持します。
+用途:
 
-### 1. GitHub Releases の最新SQLiteを取得（存在する場合）
-
-- latest release の asset から `song_master.sqlite` をダウンロード
-- 存在しなければローカル新規作成
-
-### 2. 収録フラグを一旦リセット
-
-更新開始時に `music.is_ac_active` / `music.is_inf_active` を一旦 `0` にします。  
-その後Textageデータに存在する曲のみフラグを立て直します。
-
-これにより、Textage側から削除された曲は「未収録扱い」として残ります。
-
-### 3. Upsert（存在すれば更新、無ければ追加）
-
-- `music` は `textage_id` をキーに Upsert
-- `chart` は `(music_id, play_style, difficulty)` をキーに Upsert
+- クライアントが最新版を検出するためのメタ情報
+- Textage ソース更新有無の判定（ハッシュ比較）
 
 ---
 
-## 正規化処理
+# データソース
 
-Textage由来の文字列は、DB保存時に以下を正規化します。
+以下を取得して解析します。
 
-- HTMLタグ除去  
-  例: `<br>` や `<span ...>` を除去
-- HTML文字実体参照のデコード  
-  例: `&#332;` → `Ō`
-- 空白の正規化
-
-これにより、DB上での検索・一致判定を安定させます。
+- https://textage.cc/score/titletbl.js
+- https://textage.cc/score/datatbl.js
+- https://textage.cc/score/actbl.js
 
 ---
 
-### GitHub Actions での運用
+# DBスキーマ概要
 
-本システムは以下の用途での自動運用を想定しています。
+## music
 
-定期実行（毎月1日 03:00 JST）
+| column           | type                 | note |
+| ---------------- | -------------------- | ---- |
+| music_id         | INTEGER PK           | AUTOINCREMENT |
+| textage_id       | TEXT UNIQUE NOT NULL | 曲の一意キー |
+| version          | TEXT NOT NULL        | 例: `33`, `SS` |
+| title            | TEXT NOT NULL        |      |
+| title_search_key | TEXT NOT NULL        | 検索用正規化キー |
+| artist           | TEXT NOT NULL        |      |
+| genre            | TEXT NOT NULL        |      |
+| is_ac_active     | INTEGER NOT NULL     | 0/1 |
+| is_inf_active    | INTEGER NOT NULL     | 0/1 |
+| last_seen_at     | TEXT NOT NULL        | ISO8601 |
+| created_at       | TEXT NOT NULL        | ISO8601 |
+| updated_at       | TEXT NOT NULL        | ISO8601 |
 
-### Textage更新検知後の更新
+制約:
 
-SQLite生成 → Releaseへアップロード
+- `UNIQUE(textage_id)`
 
-### 注意事項
+索引:
 
-Textageデータ構造変更が発生した場合、取得処理が動かなくなる可能性があります。
+- `idx_music_title_search_key ON music(title_search_key)`
 
-本DBは公式データではありません。
+### title_search_key
 
-is_ac_active / is_inf_active はTextageのフラグを元にしており、完全一致を保証するものではありません。
+検索用正規化キー。生成仕様（固定順序）:
 
-### ライセンス
+1. lowercase
+2. trim
+3. 置換テーブル適用（`ä→a`, `ö→o`, `ü→u`, `ß→ss`, `æ→ae`, `œ→oe`, `ø→o`, `å→a`, `ç→c`, `ñ→n`, `áàâã→a`, `éèêë→e`, `íìîï→i`, `óòôõ→o`, `úùû→u`, `ýÿ→y`）
+4. Unicode 分解（NFD）→ 結合文字除去
+5. 連続空白圧縮
 
-本リポジトリのコードはリポジトリ内のLICENSEに従います。
-Textageおよび楽曲情報は各権利者に帰属します。
+## chart
+
+| column       | type           | note |
+| ------------ | -------------- | ---- |
+| chart_id     | INTEGER PK     | AUTOINCREMENT |
+| music_id     | INTEGER NOT NULL | `music(music_id)` 参照 |
+| play_style   | TEXT NOT NULL  | `SP` / `DP` |
+| difficulty   | TEXT NOT NULL  | `BEGINNER` / `NORMAL` / `HYPER` / `ANOTHER` / `LEGGENDARIA` |
+| level        | INTEGER NOT NULL |      |
+| notes        | INTEGER NOT NULL |      |
+| is_active    | INTEGER NOT NULL | 0/1 |
+| last_seen_at | TEXT NOT NULL  | ISO8601 |
+| created_at   | TEXT NOT NULL  | ISO8601 |
+| updated_at   | TEXT NOT NULL  | ISO8601 |
+
+制約:
+
+- `UNIQUE(music_id, play_style, difficulty)`
+- `FOREIGN KEY(music_id) REFERENCES music(music_id)`
+
+索引:
+
+- `idx_chart_music_active ON chart(music_id, is_active)`
+- `idx_chart_filter ON chart(play_style, difficulty, level, is_active)`
+- `idx_chart_notes_active ON chart(is_active, notes)`
+
+## meta
+
+| column           | type           | note |
+| ---------------- | -------------- | ---- |
+| schema_version   | TEXT NOT NULL  | スキーマバージョン |
+| asset_updated_at | TEXT NOT NULL  | 前回成果物時刻等 |
+| generated_at     | TEXT NOT NULL  | 生成時刻 |
+
+備考:
+
+- 生成時に `meta` は1レコードに更新されます。
+
+---
+
+# chart_id 永続保証
+
+同一キー:
+
+```text
+(textage_id, play_style, difficulty)
+```
+
+に対して `chart_id` は将来の生成でも変更されません。
+
+CI で前回リリースとの比較検証を行い、  
+不一致があればビルドは失敗します。
+
+---
+
+# スキップ条件（Textage未更新）
+
+前回 `latest.json` の `source_hashes` と、今回取得した  
+`titletbl.js` / `datatbl.js` / `actbl.js` の SHA-256 がすべて一致した場合、  
+生成処理はスキップされます。
+
+---
+
+# セットアップ
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+# 実行
+
+```bash
+python main.py
+```
+
+生成後:
+
+- SQLite 出力
+- latest.json 出力
+- 整合性チェック実行
+
+---
+
+# CIフロー概要
+
+1. 前回リリース成果物取得
+2. Textage 取得 + ハッシュ比較
+3. SQLite 生成（必要時のみ）
+4. スキーマ・整合性チェック
+5. 前回リリースとの `chart_id` 比較
+6. `latest.json` 生成
+7. 成果物公開
+
+---
+
+# 互換性ポリシー
+
+- `chart_id` は既存キーに対して変更しない
+- `textage_id` を曲の唯一識別子とする
+- スキーマ変更時は `schema_version` を更新する
+- `title_search_key` 生成仕様変更は破壊的変更として扱う
+
+---
+
+# 注意事項
+
+- Textage 構造変更時はパーサ修正が必要
+- `chart_id` を振り直すような変更は禁止
+- 生成物は必ず検証を通してから公開すること
+
+---
+
+# ライセンス
+
+本プロジェクトは個人利用目的です。  
+配布データの利用は自己責任で行ってください。
+

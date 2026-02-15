@@ -1,8 +1,10 @@
 output_db_path: "song_master.sqlite"
 schema_version: "33"
+chart_id_missing_policy: "error"
 
 github:
   owner: "tts1374"
   repo: "song_master_builder"
   upload_to_release: true
+  require_previous_release: true
   asset_name: "song_master.sqlite"
