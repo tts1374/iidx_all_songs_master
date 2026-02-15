@@ -94,4 +94,4 @@ def test_chart_id_stability_against_baseline(baseline_sqlite_path: Path, artifac
         new_sqlite_path=str(sqlite_path),
         missing_policy="error",
     )
-    assert summary["shared_total"] > 0
+    assert summary["old_total"] == 0 or summary["shared_total"] > 0

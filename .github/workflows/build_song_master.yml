@@ -58,7 +58,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Download baseline sqlite from latest release
+      - name: Prepare baseline sqlite (latest release or bootstrap)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -66,52 +66,113 @@ jobs:
           import json
           import os
           import pathlib
+          import sqlite3
           import yaml
           from src.github_release import get_latest_release, find_asset_by_name, download_asset
+
+          def write_env(name: str, value: str):
+              with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+                  env_file.write(f"{name}={value}\n")
+
+          def create_empty_baseline(path: pathlib.Path):
+              conn = sqlite3.connect(str(path))
+              try:
+                  cur = conn.cursor()
+                  cur.execute(
+                      """
+                      CREATE TABLE IF NOT EXISTS music (
+                          music_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          textage_id TEXT NOT NULL UNIQUE
+                      );
+                      """
+                  )
+                  cur.execute(
+                      """
+                      CREATE TABLE IF NOT EXISTS chart (
+                          chart_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          music_id INTEGER NOT NULL,
+                          play_style TEXT NOT NULL,
+                          difficulty TEXT NOT NULL,
+                          UNIQUE(music_id, play_style, difficulty),
+                          FOREIGN KEY(music_id) REFERENCES music(music_id)
+                      );
+                      """
+                  )
+                  conn.commit()
+              finally:
+                  conn.close()
 
           settings = yaml.safe_load(pathlib.Path("settings.yaml").read_text(encoding="utf-8"))
           owner = settings["github"]["owner"]
           repo = settings["github"]["repo"]
           token = os.environ["GITHUB_TOKEN"]
-
-          release = get_latest_release(f"{owner}/{repo}", token)
-          if release is None:
-              raise RuntimeError("baseline取得失敗: latest release が存在しません")
+          fallback_asset_name = settings.get("github", {}).get("asset_name")
 
           out_dir = pathlib.Path("baseline")
           out_dir.mkdir(parents=True, exist_ok=True)
-
-          latest_asset = find_asset_by_name(release, "latest.json")
-          if latest_asset is None:
-              raise RuntimeError("baseline取得失敗: latest.json が存在しません")
-          latest_path = out_dir / "latest.json"
-          download_asset(latest_asset, str(latest_path), token=token)
-
-          manifest = json.loads(latest_path.read_text(encoding="utf-8"))
-          file_name = manifest.get("file_name")
-          if not file_name:
-              raise RuntimeError("baseline取得失敗: latest.json に file_name がありません")
-
-          sqlite_asset = find_asset_by_name(release, file_name)
-          if sqlite_asset is None:
-              raise RuntimeError(f"baseline取得失敗: sqlite asset が存在しません: {file_name}")
-
           baseline_sqlite = out_dir / "baseline.sqlite"
-          download_asset(sqlite_asset, str(baseline_sqlite), token=token)
 
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
-              env_file.write(f"BASELINE_SQLITE_PATH={baseline_sqlite.resolve()}\\n")
+          release = get_latest_release(f"{owner}/{repo}", token)
+          selected_asset = None
+          selected_name = None
+
+          if release is not None:
+              latest_asset = find_asset_by_name(release, "latest.json")
+              if latest_asset is not None:
+                  latest_path = out_dir / "latest.json"
+                  download_asset(latest_asset, str(latest_path), token=token)
+                  manifest = json.loads(latest_path.read_text(encoding="utf-8"))
+                  file_name = manifest.get("file_name")
+                  if file_name:
+                      manifest_asset = find_asset_by_name(release, file_name)
+                      if manifest_asset is not None:
+                          selected_asset = manifest_asset
+                          selected_name = file_name
+
+              if selected_asset is None and fallback_asset_name:
+                  fallback_asset = find_asset_by_name(release, fallback_asset_name)
+                  if fallback_asset is not None:
+                      selected_asset = fallback_asset
+                      selected_name = fallback_asset_name
+
+              if selected_asset is None:
+                  sqlite_assets = [
+                      asset for asset in release.get("assets", [])
+                      if str(asset.get("name", "")).lower().endswith(".sqlite")
+                  ]
+                  if sqlite_assets:
+                      sqlite_assets.sort(key=lambda a: a.get("updated_at") or "", reverse=True)
+                      selected_asset = sqlite_assets[0]
+                      selected_name = str(selected_asset.get("name", "baseline.sqlite"))
+
+          if selected_asset is not None:
+              download_asset(selected_asset, str(baseline_sqlite), token=token)
+              write_env("BASELINE_BOOTSTRAP", "0")
+              print(f"baseline source: release asset ({selected_name})")
+          else:
+              create_empty_baseline(baseline_sqlite)
+              write_env("BASELINE_BOOTSTRAP", "1")
+              print("baseline source: bootstrap empty sqlite (first run)")
+
+          write_env("BASELINE_SQLITE_PATH", str(baseline_sqlite.resolve()))
           PY
 
       - name: Disable publish during verification phase
+        env:
+          BASELINE_BOOTSTRAP: ${{ env.BASELINE_BOOTSTRAP }}
         run: |
           python - <<'PY'
+          import os
           import pathlib
           import yaml
 
           settings_path = pathlib.Path("settings.yaml")
           settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
-          settings.setdefault("github", {})["upload_to_release"] = False
+          github_cfg = settings.setdefault("github", {})
+          github_cfg["upload_to_release"] = False
+          if os.environ.get("BASELINE_BOOTSTRAP") == "1":
+              github_cfg["require_previous_release"] = False
+              print("bootstrap mode enabled: require_previous_release=false")
           settings_path.write_text(yaml.safe_dump(settings, allow_unicode=True, sort_keys=False), encoding="utf-8")
           PY
 
