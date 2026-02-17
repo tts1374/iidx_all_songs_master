@@ -139,7 +139,24 @@ def _assert_index_exists(conn: sqlite3.Connection, table_name: str, index_name: 
         raise RuntimeError(f"インデックスが見つかりません: {index_name}")
 
 
-def validate_db_schema_and_data(sqlite_path: str):
+def _read_meta_schema_version(conn: sqlite3.Connection) -> str:
+    """Read `meta.schema_version` from SQLite."""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT schema_version
+        FROM meta
+        ORDER BY rowid DESC
+        LIMIT 1;
+        """
+    )
+    row = cur.fetchone()
+    if row is None or row[0] is None:
+        raise RuntimeError("meta.schema_version が見つかりません")
+    return str(row[0])
+
+
+def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str | None = None):
     """
     生成SQLiteの最低限スキーマ・データ要件を検証する。
 
@@ -150,6 +167,8 @@ def validate_db_schema_and_data(sqlite_path: str):
     - `chart(music_id, play_style, difficulty)` に UNIQUE 制約がある
     - `idx_music_title_search_key` が存在する
     - `title_search_key` の NULL 行がない
+    - `meta.schema_version` が存在する
+    - `expected_schema_version` 指定時は `meta.schema_version` と一致する
     """
     conn = sqlite3.connect(sqlite_path)
     try:
@@ -169,6 +188,15 @@ def validate_db_schema_and_data(sqlite_path: str):
         null_count = int(cur.fetchone()[0])
         if null_count > 0:
             raise RuntimeError(f"title_search_key に NULL が含まれています: {null_count} 件")
+
+        actual_schema_version = _read_meta_schema_version(conn)
+        if expected_schema_version is not None and actual_schema_version != str(
+            expected_schema_version
+        ):
+            raise RuntimeError(
+                "meta.schema_version が不一致です: "
+                f"{actual_schema_version} != {expected_schema_version}"
+            )
     finally:
         conn.close()
 

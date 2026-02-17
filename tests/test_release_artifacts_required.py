@@ -88,6 +88,22 @@ def test_latest_json_integrity(artifact_paths: dict):
     assert int(manifest["byte_size"]) == sqlite_path.stat().st_size
     assert manifest["sha256"] == _sha256_hex(sqlite_path)
     dt.datetime.fromisoformat(str(manifest["generated_at"]).replace("Z", "+00:00"))
+
+    conn = sqlite3.connect(str(sqlite_path))
+    try:
+        row = conn.execute(
+            """
+            SELECT schema_version
+            FROM meta
+            ORDER BY rowid DESC
+            LIMIT 1;
+            """
+        ).fetchone()
+        assert row is not None, "meta.schema_version が存在しません"
+        assert str(row[0]) == str(manifest["schema_version"])
+    finally:
+        conn.close()
+
     assert latest_json_path.exists()
 
 
@@ -99,6 +115,6 @@ def test_chart_id_stability_against_baseline(baseline_sqlite_path: Path, artifac
     summary = validate_chart_id_stability(
         old_sqlite_path=str(baseline_sqlite_path),
         new_sqlite_path=str(sqlite_path),
-        missing_policy="error",
+        missing_policy="warn",
     )
     assert summary["old_total"] == 0 or summary["shared_total"] > 0

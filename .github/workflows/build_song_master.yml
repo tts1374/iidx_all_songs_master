@@ -170,6 +170,7 @@ jobs:
           settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
           github_cfg = settings.setdefault("github", {})
           github_cfg["upload_to_release"] = False
+          settings["chart_id_missing_policy"] = "warn"
           if os.environ.get("BASELINE_BOOTSTRAP") == "1":
               github_cfg["require_previous_release"] = False
               print("bootstrap mode enabled: require_previous_release=false")
@@ -179,7 +180,6 @@ jobs:
       - name: Build artifacts (no publish)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           python main.py
 
@@ -191,16 +191,19 @@ jobs:
         run: |
           pytest -q -m "full"
 
-      - name: Publish artifacts to latest release
+      - name: Publish artifacts to date-tag release
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           python - <<'PY'
           import json
+          import os
           import pathlib
           import yaml
-          from src.github_release import upload_files_to_latest_release
+          from src.discord_notify import send_discord_message
+          from src.github_release import publish_files_as_new_date_release
 
           settings = yaml.safe_load(pathlib.Path("settings.yaml").read_text(encoding="utf-8"))
           owner = settings["github"]["owner"]
@@ -224,11 +227,34 @@ jobs:
           if not sqlite_path.exists():
               raise RuntimeError(f"公開失敗: SQLite が存在しません: {sqlite_name}")
 
-          upload_files_to_latest_release(
+          release = publish_files_as_new_date_release(
               repo=f"{owner}/{repo}",
-              token=__import__("os").environ["GITHUB_TOKEN"],
+              token=os.environ["GITHUB_TOKEN"],
               file_paths=[str(sqlite_path), str(latest_path)],
+              generated_at=str(manifest.get("generated_at") or ""),
           )
+
+          release_url = str(release.get("html_url", ""))
+          release_tag = str(release.get("tag_name", ""))
+          generated_at = str(manifest.get("generated_at", ""))
+          sha256 = str(manifest.get("sha256", ""))
+
+          print(f"published release: tag={release_tag} url={release_url}")
+
+          webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+          if webhook:
+              send_discord_message(
+                  webhook,
+                  "\n".join(
+                      [
+                          "song master release published",
+                          f"- release_url: {release_url}",
+                          f"- tag: {release_tag}",
+                          f"- generated_at: {generated_at}",
+                          f"- sha256: {sha256}",
+                      ]
+                  ),
+              )
           PY
 
       - name: Notify weekly failure

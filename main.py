@@ -20,7 +20,6 @@ import yaml
 
 from src.build_validation import (
     build_latest_manifest,
-    utc_now_iso,
     validate_chart_id_stability,
     validate_db_schema_and_data,
     validate_latest_manifest,
@@ -31,7 +30,7 @@ from src.github_release import (
     download_asset,
     find_asset_by_name,
     get_latest_release,
-    upload_files_to_latest_release,
+    publish_files_as_new_date_release,
 )
 from src.sqlite_builder import build_or_update_sqlite
 from src.textage_loader import fetch_textage_tables_with_hashes
@@ -181,11 +180,13 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
         token = os.environ["GITHUB_TOKEN"]
         discord_webhook = os.environ.get("DISCORD_WEBHOOK_URL")
         repo_full = f"{owner}/{repo}"
+        generated_utc = datetime.now(timezone.utc)
+        generated_at = generated_utc.isoformat().replace("+00:00", "Z")
 
         artifacts = resolve_artifact_paths(
             output_db_path=output_db_path,
             latest_manifest_name=LATEST_MANIFEST_NAME,
-            generated_utc=datetime.now(timezone.utc),
+            generated_utc=generated_utc,
         )
         sqlite_path = artifacts["sqlite_path"]
         latest_json_path = artifacts["latest_json_path"]
@@ -246,7 +247,10 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                 asset_updated_at=previous_asset_updated_at,
             )
 
-            validate_db_schema_and_data(sqlite_path)
+            validate_db_schema_and_data(
+                sqlite_path,
+                expected_schema_version=schema_version,
+            )
 
             if not previous_sqlite_path:
                 if require_previous_release:
@@ -264,17 +268,19 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
         manifest = build_latest_manifest(
             sqlite_path=sqlite_path,
             schema_version=schema_version,
-            generated_at=utc_now_iso(),
+            generated_at=generated_at,
             source_hashes=source_hashes,
         )
         write_latest_manifest(latest_json_path, manifest)
         validate_latest_manifest(latest_json_path, sqlite_path)
 
+        published_release = None
         if upload_to_release:
-            upload_files_to_latest_release(
+            published_release = publish_files_as_new_date_release(
                 repo=repo_full,
                 token=token,
                 file_paths=[sqlite_path, latest_json_path],
+                generated_at=manifest.get("generated_at"),
             )
 
         if discord_webhook:
@@ -286,11 +292,16 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                 f"- chart_processed: {result['chart_processed']}",
                 f"- ignored: {result['ignored']}",
                 f"- chart_id_checked: {'yes' if chart_check else 'no'}",
+                f"- generated_at: {manifest['generated_at']}",
+                f"- sha256: {manifest['sha256']}",
                 f"- updated_at: {now_iso()}",
             ]
             if chart_check:
                 msg_lines.append(f"- shared_charts: {chart_check['shared_total']}")
                 msg_lines.append(f"- missing_in_new: {chart_check['missing_in_new_total']}")
+            if published_release:
+                msg_lines.append(f"- tag: {published_release.get('tag_name')}")
+                msg_lines.append(f"- release_url: {published_release.get('html_url')}")
             send_discord_message(discord_webhook, "\n".join(msg_lines))
 
         print("SUCCESS")
