@@ -286,7 +286,7 @@ def test_real_ac_score_csv_report_and_discord_fallbacks(
         csv_path=str(REAL_AC_SCORE_CSV_PATH),
         report_path=str(report_path),
         unmatched_csv_path=str(unmatched_csv_path),
-        send_discord=False,
+        send_discord=True,
     )
     printed = capsys.readouterr().out
     assert "AC score CSV identification report" in printed

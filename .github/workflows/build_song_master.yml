@@ -188,6 +188,7 @@ jobs:
           CI: "true"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASELINE_SQLITE_PATH: ${{ env.BASELINE_SQLITE_PATH }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           pytest -q -m "full"
 
