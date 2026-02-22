@@ -107,7 +107,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `generated_at` | `string` | 必須 | UTC ISO8601 (`Z` suffix) |
 | `sha256` | `string` | 必須 | SQLite 実体の SHA-256 |
 | `byte_size` | `number` | 必須 | SQLite 実体サイズ（bytes） |
-| `source_hashes` | `object` | 任意 | Textage ソース 3 ファイルの SHA-256 |
+| `source_hashes` | `object` | 任意 | Textage 3 ソース + manual alias CSV の SHA-256 |
 
 ### `source_hashes` サブキー
 
@@ -116,6 +116,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | `titletbl.js` | `string` | `titletbl.js` の SHA-256 |
 | `datatbl.js` | `string` | `datatbl.js` の SHA-256 |
 | `actbl.js` | `string` | `actbl.js` の SHA-256 |
+| `manual_alias_csv` | `string` | `music_alias_manual_csv_path` で指定した CSV の SHA-256 |
 
 ### `latest.json` 整合性検証
 
@@ -177,8 +178,8 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | --- | --- | --- |
 | 1 | `settings.yaml` 読み込み | 設定 |
 | 2 | 最新リリースから前回 SQLite / `latest.json` 取得（必要時） | 基準データ |
-| 3 | Textage 3 ソース取得 + ハッシュ計算 | `source_hashes` |
-| 4 | 3 ハッシュ完全一致ならスキップ | スキップ通知 |
+| 3 | Textage 3 ソース取得 + manual alias CSV ハッシュ計算 | `source_hashes` |
+| 4 | 4 ハッシュ完全一致ならスキップ | スキップ通知 |
 | 5 | SQLite 更新生成 | `song_master_YYYY-MM-DD.sqlite` |
 | 6 | DB 制約/データ整合性検証 | DB 検証 |
 | 7 | `latest.json` 生成 + 実体突合 | `latest.json` |

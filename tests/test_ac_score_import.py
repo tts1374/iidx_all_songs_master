@@ -13,7 +13,6 @@ import requests
 from src.ac_score_import import (
     build_discord_import_message,
     import_ac_score_csv,
-    send_discord_import_notification,
 )
 from src.sqlite_builder import ensure_schema
 
@@ -260,62 +259,20 @@ def test_real_ac_score_csv_report_and_discord_fallbacks(
     monkeypatch: pytest.MonkeyPatch,
     caplog,
     capsys,
+    artifact_paths: dict,
 ):  # pylint: disable=too-many-locals
     """実CSVでレポート生成とDiscordメッセージの段階フォールバックを検証する。"""
-    sqlite_path = tmp_path / "song_master.sqlite"
+    sqlite_path = Path(artifact_paths["sqlite_path"])
+    manifest = artifact_paths["manifest"]
+    assert sqlite_path.name == str(manifest["file_name"])
+    assert sqlite_path.name.startswith("song_master_")
+    assert sqlite_path.suffix == ".sqlite"
+
     report_path = tmp_path / "import_report.json"
     unmatched_csv_path = tmp_path / "unmatched_titles.csv"
 
     titles = _read_titles(REAL_AC_SCORE_CSV_PATH)
     assert len(titles) > 1000
-    unique_titles = list(dict.fromkeys(titles))
-    assert len(unique_titles) >= 10
-
-    matched_alias_titles = unique_titles[:3]
-    _seed_aliases(
-        sqlite_path,
-        [
-            ("REAL001", matched_alias_titles[0], "manual"),
-            ("REAL002", matched_alias_titles[1], "official"),
-            ("REAL003", matched_alias_titles[2], "manual"),
-        ],
-    )
-
-    report = import_ac_score_csv(
-        sqlite_path=str(sqlite_path),
-        csv_path=str(REAL_AC_SCORE_CSV_PATH),
-        report_path=str(report_path),
-        unmatched_csv_path=str(unmatched_csv_path),
-        send_discord=True,
-    )
-    printed = capsys.readouterr().out
-    assert "AC score CSV identification report" in printed
-    assert "- unmatched_titles_top10:" in printed
-    assert report["source_csv_file"] == str(REAL_AC_SCORE_CSV_PATH)
-    assert report["total_song_rows"] == len(titles)
-
-    matched_title_set = set(matched_alias_titles)
-    expected_matched_rows = sum(1 for title in titles if title in matched_title_set)
-    assert report["matched_song_rows"] == expected_matched_rows
-    assert report["unmatched_song_rows"] == report["total_song_rows"] - expected_matched_rows
-    assert len(report["unmatched_titles_topN"]) == 10
-
-    content_top10 = build_discord_import_message(report, limit=100_000)
-    for item in report["unmatched_titles_topN"]:
-        assert item["title"] in content_top10
-
-    report_top5 = dict(report)
-    report_top5["unmatched_titles_topN"] = report["unmatched_titles_topN"][:5]
-    content_top5_reference = build_discord_import_message(report_top5, limit=100_000)
-    assert len(content_top10) > len(content_top5_reference)
-
-    content_top5 = build_discord_import_message(report, limit=len(content_top5_reference))
-    assert content_top5 == content_top5_reference
-    if len(report["unmatched_titles_topN"]) >= 6:
-        assert report["unmatched_titles_topN"][5]["title"] not in content_top5
-
-    content_omitted = build_discord_import_message(report, limit=len(content_top5_reference) - 1)
-    assert "Unmatched Titles: See log" in content_omitted
 
     def _raise_post(*_args, **_kwargs):
         raise requests.ConnectionError("network down")
@@ -323,5 +280,48 @@ def test_real_ac_score_csv_report_and_discord_fallbacks(
     monkeypatch.setattr("src.ac_score_import.requests.post", _raise_post)
     caplog.set_level("WARNING")
 
-    send_discord_import_notification("https://discord.invalid/webhook", content_top10)
+    report = import_ac_score_csv(
+        sqlite_path=str(sqlite_path),
+        csv_path=str(REAL_AC_SCORE_CSV_PATH),
+        report_path=str(report_path),
+        unmatched_csv_path=str(unmatched_csv_path),
+        webhook_url="https://discord.invalid/webhook",
+        send_discord=True,
+    )
+    printed = capsys.readouterr().out
+    assert "AC score CSV identification report" in printed
+    assert "- matched_song_rows:" in printed
+    assert report["source_csv_file"] == str(REAL_AC_SCORE_CSV_PATH)
+    assert report["total_song_rows"] == len(titles)
     assert "Failed to send Discord import notification" in caplog.text
+
+    content_from_report = build_discord_import_message(report, limit=100_000)
+    assert "AC Score CSV Import Report" in content_from_report
+    assert "CSV File: 7229-6088_dp_score.csv" in content_from_report
+
+    fallback_report = dict(report)
+    fallback_report["unmatched_titles_topN"] = [
+        {"title": f"{i:02d}_" + ("L" * 48), "count": i} for i in range(1, 11)
+    ]
+
+    content_top10 = build_discord_import_message(fallback_report, limit=100_000)
+    for item in fallback_report["unmatched_titles_topN"]:
+        assert item["title"] in content_top10
+
+    fallback_report_top5 = dict(fallback_report)
+    fallback_report_top5["unmatched_titles_topN"] = fallback_report["unmatched_titles_topN"][:5]
+    content_top5_reference = build_discord_import_message(fallback_report_top5, limit=100_000)
+    assert len(content_top10) > len(content_top5_reference)
+
+    content_top5 = build_discord_import_message(
+        fallback_report,
+        limit=len(content_top5_reference),
+    )
+    assert content_top5 == content_top5_reference
+    assert fallback_report["unmatched_titles_topN"][5]["title"] not in content_top5
+
+    content_omitted = build_discord_import_message(
+        fallback_report,
+        limit=len(content_top5_reference) - 1,
+    )
+    assert "Unmatched Titles: See log" in content_omitted

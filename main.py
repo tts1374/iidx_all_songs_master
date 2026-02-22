@@ -20,6 +20,7 @@ import yaml
 
 from src.build_validation import (
     build_latest_manifest,
+    file_sha256,
     validate_chart_id_stability,
     validate_db_schema_and_data,
     validate_latest_manifest,
@@ -37,6 +38,7 @@ from src.textage_loader import fetch_textage_tables_with_hashes
 
 JST = timezone(timedelta(hours=9), "JST")
 LATEST_MANIFEST_NAME = "latest.json"
+MANUAL_ALIAS_HASH_KEY = "manual_alias_csv"
 
 
 def now_iso() -> str:
@@ -65,11 +67,11 @@ def has_same_textage_source_hashes(
     previous_hashes: dict[str, str] | None,
     current_hashes: dict[str, str],
 ) -> bool:
-    """Textage 3ファイルのハッシュが全一致するか判定する。"""
+    """Textage 3 files + manual alias CSV hash are all unchanged."""
     if not previous_hashes:
         return False
 
-    required_keys = ("titletbl.js", "datatbl.js", "actbl.js")
+    required_keys = ("titletbl.js", "datatbl.js", "actbl.js", MANUAL_ALIAS_HASH_KEY)
     for key in required_keys:
         if previous_hashes.get(key) != current_hashes.get(key):
             return False
@@ -166,6 +168,8 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
         manual_alias_csv_path = str(
             settings.get("music_alias_manual_csv_path", DEFAULT_MANUAL_ALIAS_CSV_PATH)
         ).strip() or DEFAULT_MANUAL_ALIAS_CSV_PATH
+        if not os.path.exists(manual_alias_csv_path):
+            raise RuntimeError(f"manual alias CSV not found: {manual_alias_csv_path}")
 
         github_cfg = settings.get("github", {})
         owner = github_cfg.get("owner")
@@ -218,7 +222,9 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                     if isinstance(source_hashes, dict):
                         previous_source_hashes = source_hashes
 
-            titletbl, datatbl, actbl, source_hashes = fetch_textage_tables_with_hashes()
+            titletbl, datatbl, actbl, textage_source_hashes = fetch_textage_tables_with_hashes()
+            source_hashes = dict(textage_source_hashes)
+            source_hashes[MANUAL_ALIAS_HASH_KEY] = file_sha256(manual_alias_csv_path)
 
             if has_same_textage_source_hashes(previous_source_hashes, source_hashes):
                 if discord_webhook:
@@ -227,12 +233,12 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                         "\n".join(
                             [
                                 "song master build をスキップしました",
-                                "- 理由: Textage ソースハッシュが未変更",
+                                "- 理由: Textage + manual alias CSV ソースハッシュが未変更",
                                 f"- 時刻: {now_iso()}",
                             ]
                         ),
                     )
-                print("SKIPPED: Textage ソースハッシュ未変更")
+                print("SKIPPED: source hashes unchanged (Textage + manual alias CSV)")
                 return
 
             if previous_info:
