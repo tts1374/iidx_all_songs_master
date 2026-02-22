@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import sqlite3
 from pathlib import Path
@@ -12,11 +13,14 @@ import requests
 from src.ac_score_import import (
     build_discord_import_message,
     import_ac_score_csv,
+    send_discord_import_notification,
 )
 from src.sqlite_builder import ensure_schema
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+REAL_AC_SCORE_CSV_PATH = PROJECT_ROOT / "data" / "7229-6088_dp_score.csv"
 
 
 def _seed_aliases(
@@ -39,6 +43,14 @@ def _seed_aliases(
         conn.commit()
     finally:
         conn.close()
+
+
+def _read_titles(csv_path: Path) -> list[str]:
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        assert reader.fieldnames is not None
+        assert "タイトル" in reader.fieldnames
+        return [str(row["タイトル"]).strip() for row in reader]
 
 
 @pytest.mark.light
@@ -222,4 +234,76 @@ def test_webhook_failure_does_not_fail_import(tmp_path: Path, monkeypatch: pytes
     )
 
     assert report["matched_song_rows"] == 3
+    assert "Failed to send Discord import notification" in caplog.text
+
+
+@pytest.mark.light
+def test_real_ac_score_csv_report_and_discord_fallbacks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+    capsys,
+):
+    sqlite_path = tmp_path / "song_master.sqlite"
+    report_path = tmp_path / "import_report.json"
+    unmatched_csv_path = tmp_path / "unmatched_titles.csv"
+
+    titles = _read_titles(REAL_AC_SCORE_CSV_PATH)
+    assert len(titles) > 1000
+    unique_titles = list(dict.fromkeys(titles))
+    assert len(unique_titles) >= 10
+
+    matched_alias_titles = unique_titles[:3]
+    _seed_aliases(
+        sqlite_path,
+        [
+            ("REAL001", matched_alias_titles[0], "manual"),
+            ("REAL002", matched_alias_titles[1], "official"),
+            ("REAL003", matched_alias_titles[2], "manual"),
+        ],
+    )
+
+    report = import_ac_score_csv(
+        sqlite_path=str(sqlite_path),
+        csv_path=str(REAL_AC_SCORE_CSV_PATH),
+        report_path=str(report_path),
+        unmatched_csv_path=str(unmatched_csv_path),
+        send_discord=False,
+    )
+    printed = capsys.readouterr().out
+    assert "AC score CSV identification report" in printed
+    assert "- unmatched_titles_top10:" in printed
+    assert report["source_csv_file"] == str(REAL_AC_SCORE_CSV_PATH)
+    assert report["total_song_rows"] == len(titles)
+
+    matched_title_set = set(matched_alias_titles)
+    expected_matched_rows = sum(1 for title in titles if title in matched_title_set)
+    assert report["matched_song_rows"] == expected_matched_rows
+    assert report["unmatched_song_rows"] == report["total_song_rows"] - expected_matched_rows
+    assert len(report["unmatched_titles_topN"]) == 10
+
+    content_top10 = build_discord_import_message(report, limit=100_000)
+    for item in report["unmatched_titles_topN"]:
+        assert item["title"] in content_top10
+
+    report_top5 = dict(report)
+    report_top5["unmatched_titles_topN"] = report["unmatched_titles_topN"][:5]
+    content_top5_reference = build_discord_import_message(report_top5, limit=100_000)
+    assert len(content_top10) > len(content_top5_reference)
+
+    content_top5 = build_discord_import_message(report, limit=len(content_top5_reference))
+    assert content_top5 == content_top5_reference
+    if len(report["unmatched_titles_topN"]) >= 6:
+        assert report["unmatched_titles_topN"][5]["title"] not in content_top5
+
+    content_omitted = build_discord_import_message(report, limit=len(content_top5_reference) - 1)
+    assert "Unmatched Titles: See log" in content_omitted
+
+    def _raise_post(*_args, **_kwargs):
+        raise requests.ConnectionError("network down")
+
+    monkeypatch.setattr("src.ac_score_import.requests.post", _raise_post)
+    caplog.set_level("WARNING")
+
+    send_discord_import_notification("https://discord.invalid/webhook", content_top10)
     assert "Failed to send Discord import notification" in caplog.text
