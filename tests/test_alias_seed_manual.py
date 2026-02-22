@@ -1,4 +1,4 @@
-"""Tests for official/manual alias seeding into SQLite."""
+"""SQLite への公式/手動別名投入処理のテスト。"""
 
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ def _write_manual_alias_csv(path: Path, rows: list[dict]) -> Path:
 
 @pytest.mark.light
 def test_seed_official_aliases_respects_active_scope_flags():
+    """公式別名投入が AC/INF の有効フラグに従うことを確認する。"""
     conn = sqlite3.connect(":memory:")
     try:
         ensure_schema(conn)
@@ -85,6 +86,7 @@ def test_seed_official_aliases_respects_active_scope_flags():
 
 @pytest.mark.light
 def test_seed_manual_aliases_from_csv_inserts_rows(tmp_path: Path):
+    """手動別名CSVから行が正常に投入されることを確認する。"""
     conn = sqlite3.connect(":memory:")
     try:
         ensure_schema(conn)
@@ -143,6 +145,7 @@ def test_seed_manual_aliases_from_csv_inserts_rows(tmp_path: Path):
 
 @pytest.mark.light
 def test_seed_manual_aliases_fails_on_orphan_textage_id(tmp_path: Path):
+    """CSVの textage_id が孤立している場合に失敗することを確認する。"""
     conn = sqlite3.connect(":memory:")
     try:
         ensure_schema(conn)
@@ -178,6 +181,7 @@ def test_seed_manual_aliases_fails_on_orphan_textage_id(tmp_path: Path):
 
 @pytest.mark.light
 def test_seed_manual_aliases_fails_on_csv_duplicate_scope_alias(tmp_path: Path):
+    """CSV内で同一(scope, alias)が重複すると失敗することを確認する。"""
     conn = sqlite3.connect(":memory:")
     try:
         ensure_schema(conn)
@@ -222,6 +226,7 @@ def test_seed_manual_aliases_fails_on_csv_duplicate_scope_alias(tmp_path: Path):
 
 @pytest.mark.light
 def test_seed_manual_aliases_fails_on_official_collision(tmp_path: Path):
+    """公式別名と衝突する手動別名で失敗することを確認する。"""
     conn = sqlite3.connect(":memory:")
     try:
         ensure_schema(conn)
@@ -258,6 +263,7 @@ def test_seed_manual_aliases_fails_on_official_collision(tmp_path: Path):
 
 @pytest.mark.light
 def test_seed_manual_aliases_skips_redundant_same_as_official(tmp_path: Path):
+    """公式別名と同一の手動別名は冗長としてスキップされることを確認する。"""
     conn = sqlite3.connect(":memory:")
     try:
         ensure_schema(conn)
@@ -299,4 +305,3 @@ def test_seed_manual_aliases_skips_redundant_same_as_official(tmp_path: Path):
         assert manual_count == 0
     finally:
         conn.close()
-

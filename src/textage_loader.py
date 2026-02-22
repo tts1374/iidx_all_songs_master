@@ -1,4 +1,4 @@
-"""Load Textage JS tables and parse them into Python dicts."""
+﻿"""Load Textage JS tables and parse them into Python dicts."""
 
 from __future__ import annotations
 

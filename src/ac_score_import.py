@@ -1,4 +1,4 @@
-"""AC score CSV import identification report and Discord notification."""
+"""ACスコアCSV取り込み時の同定レポート生成とDiscord通知を行う。"""
 
 from __future__ import annotations
 
@@ -24,12 +24,12 @@ LOGGER = logging.getLogger(__name__)
 
 
 def now_utc_iso() -> str:
-    """Return current UTC timestamp in ISO8601 with Z suffix."""
+    """現在のUTC時刻をZ付きISO8601文字列で返す。"""
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def load_ac_alias_map(conn: sqlite3.Connection) -> dict[str, str]:
-    """Load AC alias mapping once and return alias -> textage_id dict."""
+    """AC向け別名マップを読み込み、`alias -> textage_id` を返す。"""
     cur = conn.cursor()
     cur.execute(
         """
@@ -77,8 +77,6 @@ def _read_csv_and_identify(
                     matched_song_rows += 1
                 else:
                     unmatched_titles[csv_title] += 1
-    except RuntimeError:
-        raise
     except (OSError, UnicodeDecodeError, csv.Error) as exc:
         raise RuntimeError(f"Failed to read AC score CSV: {csv_path}") from exc
 
@@ -91,7 +89,7 @@ def generate_import_report(
     matched_song_rows: int,
     unmatched_titles: Counter[str],
 ) -> dict:
-    """Generate report payload for JSON and notification."""
+    """JSON保存と通知に使う取り込み結果レポートを生成する。"""
     unmatched_song_rows = total_song_rows - matched_song_rows
     match_rate = 0.0
     if total_song_rows > 0:
@@ -114,7 +112,7 @@ def generate_import_report(
 
 
 def print_report_summary(report: dict) -> None:
-    """Print concise summary to stdout."""
+    """標準出力に要約レポートを表示する。"""
     print("AC score CSV identification report")
     print(f"- source_csv_file: {report['source_csv_file']}")
     print(f"- alias_scope: {report['alias_scope']}")
@@ -134,13 +132,13 @@ def print_report_summary(report: dict) -> None:
 
 
 def save_report_json(report: dict, report_path: str) -> None:
-    """Save report JSON artifact."""
+    """レポートをJSONファイルとして保存する。"""
     with open(report_path, "w", encoding="utf-8") as file_obj:
         json.dump(report, file_obj, ensure_ascii=False, indent=2)
 
 
 def save_unmatched_titles_csv(unmatched_titles: Counter[str], path: str) -> None:
-    """Save unmatched titles artifact."""
+    """未一致タイトル一覧をCSVとして保存する。"""
     with open(path, "w", encoding="utf-8", newline="") as file_obj:
         writer = csv.writer(file_obj)
         writer.writerow(["title", "count"])
@@ -158,7 +156,11 @@ def _build_unmatched_block(unmatched_items: list[dict]) -> list[str]:
     return lines
 
 
-def _render_discord_message(report: dict, unmatched_items: list[dict], fallback_note: str | None) -> str:
+def _render_discord_message(
+    report: dict,
+    unmatched_items: list[dict],
+    fallback_note: str | None,
+) -> str:
     lines = [
         "AC Score CSV Import Report",
         f"CSV File: {Path(report['source_csv_file']).name}",
@@ -177,11 +179,11 @@ def _render_discord_message(report: dict, unmatched_items: list[dict], fallback_
 
 
 def build_discord_import_message(report: dict, limit: int = DISCORD_SAFE_LIMIT) -> str:
-    """
-    Build Discord message with fallback:
-    1) top 10 unmatched
-    2) top 5 unmatched
-    3) omit unmatched list
+    """Discord送信用メッセージを長さ制限に合わせて段階的に生成する。
+
+    1. 未一致Top10を含める
+    2. 長すぎる場合はTop5に縮小する
+    3. さらに長い場合は未一致一覧を省略する
     """
     unmatched_top = list(report.get("unmatched_titles_topN", []))
     content = _render_discord_message(report, unmatched_top[:UNMATCHED_TOP_N], fallback_note=None)
@@ -196,7 +198,7 @@ def build_discord_import_message(report: dict, limit: int = DISCORD_SAFE_LIMIT) 
 
 
 def send_discord_import_notification(webhook_url: str | None, content: str) -> None:
-    """Send Discord webhook message. Failures are logged as warnings."""
+    """Discord Webhookへ通知を送信し、失敗時は警告ログのみを残す。"""
     if not webhook_url:
         LOGGER.warning("DISCORD_WEBHOOK_URL is not set; skipping import notification")
         return
@@ -209,7 +211,7 @@ def send_discord_import_notification(webhook_url: str | None, content: str) -> N
 
 
 def resolve_discord_webhook_url(settings_path: str = "settings.yaml") -> str | None:
-    """Resolve webhook URL from env first, then settings file."""
+    """Webhook URLを環境変数優先で解決し、未設定なら設定ファイルを参照する。"""
     env_value = os.environ.get("DISCORD_WEBHOOK_URL")
     if env_value and env_value.strip():
         return env_value.strip()
@@ -238,6 +240,7 @@ def resolve_discord_webhook_url(settings_path: str = "settings.yaml") -> str | N
     return None
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def import_ac_score_csv(
     sqlite_path: str,
     csv_path: str,
@@ -247,9 +250,9 @@ def import_ac_score_csv(
     settings_path: str = "settings.yaml",
     send_discord: bool = True,
 ) -> dict:
-    """
-    Import AC score CSV for title identification reporting.
-    This function does not fail on Discord notification errors.
+    """ACスコアCSVを取り込み、同定レポートを出力する。
+
+    Discord通知で失敗しても取り込み処理自体は失敗させない。
     """
     conn = sqlite3.connect(sqlite_path)
     try:
@@ -257,7 +260,10 @@ def import_ac_score_csv(
     finally:
         conn.close()
 
-    total_song_rows, matched_song_rows, unmatched_titles = _read_csv_and_identify(csv_path, alias_map)
+    total_song_rows, matched_song_rows, unmatched_titles = _read_csv_and_identify(
+        csv_path,
+        alias_map,
+    )
     report = generate_import_report(
         source_csv_file=csv_path,
         total_song_rows=total_song_rows,
@@ -270,7 +276,11 @@ def import_ac_score_csv(
     print_report_summary(report)
 
     if send_discord:
-        webhook = webhook_url if webhook_url is not None else resolve_discord_webhook_url(settings_path)
+        webhook = (
+            webhook_url
+            if webhook_url is not None
+            else resolve_discord_webhook_url(settings_path)
+        )
         content = build_discord_import_message(report)
         send_discord_import_notification(webhook, content)
 
@@ -278,10 +288,16 @@ def import_ac_score_csv(
 
 
 def _build_cli_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Import AC score CSV and emit alias identification report.")
+    parser = argparse.ArgumentParser(
+        description="ACスコアCSVを取り込み、別名同定レポートを出力する。"
+    )
     parser.add_argument("csv_path", help="Path to AC score CSV file")
     parser.add_argument("--sqlite-path", default="song_master.sqlite", help="Path to sqlite DB")
-    parser.add_argument("--report-path", default="import_report.json", help="Path to output JSON report")
+    parser.add_argument(
+        "--report-path",
+        default="import_report.json",
+        help="Path to output JSON report",
+    )
     parser.add_argument(
         "--unmatched-csv-path",
         default="unmatched_titles.csv",
@@ -302,7 +318,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entrypoint."""
+    """CLIエントリーポイント。"""
     parser = _build_cli_parser()
     args = parser.parse_args(argv)
 

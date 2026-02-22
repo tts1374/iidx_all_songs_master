@@ -95,6 +95,7 @@ def _resolve_base_date_tag(generated_at: str | None = None) -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def create_date_tag_release(
     repo: str,
     token: str,
@@ -205,6 +206,7 @@ def upload_files_to_release(release: dict, token: str, file_paths: list[str]):
         )
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def publish_files_as_new_date_release(
     repo: str,
     token: str,
@@ -232,12 +234,14 @@ def publish_files_as_new_date_release(
 
 
 def upload_files_to_latest_release(*_args, **_kwargs):
+    """互換API。latestタグ公開は無効化されているため常に例外を送出する。"""
     raise RuntimeError(
         "latest-tag publish is disabled. use publish_files_as_new_date_release()."
     )
 
 
 def upload_sqlite_to_latest_release(*_args, **_kwargs):
+    """互換API。latestタグ公開は無効化されているため常に例外を送出する。"""
     raise RuntimeError(
         "latest-tag publish is disabled. use publish_files_as_new_date_release()."
     )

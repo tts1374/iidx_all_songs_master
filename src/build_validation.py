@@ -1,4 +1,4 @@
-"""Validation helpers for SQLite artifacts and latest.json manifest."""
+﻿"""Validation helpers for SQLite artifacts and latest.json manifest."""
 
 from __future__ import annotations
 
@@ -138,6 +138,7 @@ def _read_meta_schema_version(conn: sqlite3.Connection) -> str:
     return str(row[0])
 
 
+# pylint: disable-next=too-many-locals,too-many-branches,too-many-statements
 def validate_db_schema_and_data(sqlite_path: str, expected_schema_version: str | None = None):
     """Validate required schema and minimal data constraints for generated SQLite."""
     conn = sqlite3.connect(sqlite_path)

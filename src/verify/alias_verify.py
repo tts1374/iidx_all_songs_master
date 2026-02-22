@@ -86,7 +86,9 @@ def verify_music_title_alias_integrity(conn: sqlite3.Connection) -> AliasVerific
     if unresolved_official_scope_count > 0:
         raise RuntimeError(
             "some active scope rows do not have official aliases: "
-            f"ac_missing={unresolved_official_ac_count}, inf_missing={unresolved_official_inf_count}"
+            "ac_missing="
+            f"{unresolved_official_ac_count}, "
+            f"inf_missing={unresolved_official_inf_count}"
         )
 
     cur.execute(

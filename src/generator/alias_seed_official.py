@@ -14,6 +14,7 @@ def reset_music_title_aliases(conn: sqlite3.Connection):
     conn.execute("DELETE FROM music_title_alias;")
 
 
+# pylint: disable-next=too-many-locals
 def seed_official_aliases(conn: sqlite3.Connection, now_utc_iso: str) -> int:
     """Insert official aliases for active scopes (ac / inf)."""
     cur = conn.cursor()
@@ -50,9 +51,10 @@ def seed_official_aliases(conn: sqlite3.Connection, now_utc_iso: str) -> int:
             if key_ac not in first_seen_by_scope_alias:
                 first_seen_by_scope_alias[key_ac] = tid
             else:
-                duplicate_scope_aliases.setdefault(key_ac, [first_seen_by_scope_alias[key_ac]]).append(
-                    tid
-                )
+                duplicate_scope_aliases.setdefault(
+                    key_ac,
+                    [first_seen_by_scope_alias[key_ac]],
+                ).append(tid)
 
         if int(is_inf_active) == 1:
             params.append(

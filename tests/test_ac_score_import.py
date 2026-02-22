@@ -1,4 +1,4 @@
-"""Tests for AC score CSV import identification report."""
+"""ACスコアCSV取り込みレポート機能のテスト。"""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ def _seed_aliases(
     sqlite_path: Path,
     aliases: list[tuple[str, str, str]],
 ) -> None:
+    """テスト用SQLiteにAC別名データを投入する。"""
     conn = sqlite3.connect(str(sqlite_path))
     try:
         ensure_schema(conn)
@@ -38,7 +39,10 @@ def _seed_aliases(
             )
             VALUES (?, 'ac', ?, ?, ?, ?)
             """,
-            [(textage_id, alias, alias_type, now, now) for textage_id, alias, alias_type in aliases],
+            [
+                (textage_id, alias, alias_type, now, now)
+                for textage_id, alias, alias_type in aliases
+            ],
         )
         conn.commit()
     finally:
@@ -46,6 +50,7 @@ def _seed_aliases(
 
 
 def _read_titles(csv_path: Path) -> list[str]:
+    """CSVからタイトル列を読み込み、前後空白を除去して返す。"""
     with csv_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
         reader = csv.DictReader(file_obj)
         assert reader.fieldnames is not None
@@ -55,6 +60,7 @@ def _read_titles(csv_path: Path) -> list[str]:
 
 @pytest.mark.light
 def test_import_reports_match_counts_and_outputs_artifacts(tmp_path: Path):
+    """取り込み件数と成果物出力が期待どおりであることを確認する。"""
     sqlite_path = tmp_path / "song_master.sqlite"
     report_path = tmp_path / "import_report.json"
     unmatched_csv_path = tmp_path / "unmatched_titles.csv"
@@ -90,6 +96,7 @@ def test_import_reports_match_counts_and_outputs_artifacts(tmp_path: Path):
 
 @pytest.mark.light
 def test_import_fails_when_title_column_missing(tmp_path: Path):
+    """必須タイトル列が欠落したCSVで例外になることを確認する。"""
     sqlite_path = tmp_path / "song_master.sqlite"
     csv_path = tmp_path / "missing_title.csv"
     csv_path.write_text("曲名,バージョン\nSong A,33\n", encoding="utf-8")
@@ -108,6 +115,7 @@ def test_import_fails_when_title_column_missing(tmp_path: Path):
 
 @pytest.mark.light
 def test_import_reads_utf8_sig_csv(tmp_path: Path):
+    """UTF-8 BOM付きCSVを正常に読み込めることを確認する。"""
     sqlite_path = tmp_path / "song_master.sqlite"
     csv_path = tmp_path / "with_bom.csv"
     csv_path.write_text("タイトル,バージョン\n灼熱Beach Side Bunny,33\n", encoding="utf-8-sig")
@@ -128,6 +136,7 @@ def test_import_reads_utf8_sig_csv(tmp_path: Path):
 
 @pytest.mark.light
 def test_import_fails_when_ac_alias_map_is_empty(tmp_path: Path):
+    """AC別名マップが空の場合に例外になることを確認する。"""
     sqlite_path = tmp_path / "song_master.sqlite"
     csv_path = tmp_path / "simple.csv"
     csv_path.write_text("タイトル\nSong A\n", encoding="utf-8")
@@ -151,6 +160,7 @@ def test_import_fails_when_ac_alias_map_is_empty(tmp_path: Path):
 
 @pytest.mark.light
 def test_discord_message_limits_to_top10_unmatched():
+    """Discordメッセージには未一致Top10までのみ含まれることを確認する。"""
     report = {
         "source_csv_file": "data/sample.csv",
         "total_song_rows": 100,
@@ -169,6 +179,7 @@ def test_discord_message_limits_to_top10_unmatched():
 
 @pytest.mark.light
 def test_discord_message_falls_back_to_top5_when_too_long():
+    """長文時に未一致一覧がTop5へフォールバックすることを確認する。"""
     long_titles = [
         {"title": f"{i:02d}_" + ("L" * 48), "count": i} for i in range(1, 11)
     ]
@@ -189,6 +200,7 @@ def test_discord_message_falls_back_to_top5_when_too_long():
 
 @pytest.mark.light
 def test_discord_message_omits_list_when_even_top5_is_too_long():
+    """さらに長文時は未一致一覧が省略されることを確認する。"""
     long_titles = [
         {"title": f"{i:02d}_" + ("X" * 64), "count": i} for i in range(1, 11)
     ]
@@ -207,7 +219,12 @@ def test_discord_message_omits_list_when_even_top5_is_too_long():
 
 
 @pytest.mark.light
-def test_webhook_failure_does_not_fail_import(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog):
+def test_webhook_failure_does_not_fail_import(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+):
+    """Webhook失敗が取り込み処理全体を失敗させないことを確認する。"""
     sqlite_path = tmp_path / "song_master.sqlite"
     report_path = tmp_path / "import_report.json"
     unmatched_csv_path = tmp_path / "unmatched_titles.csv"
@@ -237,13 +254,14 @@ def test_webhook_failure_does_not_fail_import(tmp_path: Path, monkeypatch: pytes
     assert "Failed to send Discord import notification" in caplog.text
 
 
-@pytest.mark.light
+@pytest.mark.full
 def test_real_ac_score_csv_report_and_discord_fallbacks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog,
     capsys,
-):
+):  # pylint: disable=too-many-locals
+    """実CSVでレポート生成とDiscordメッセージの段階フォールバックを検証する。"""
     sqlite_path = tmp_path / "song_master.sqlite"
     report_path = tmp_path / "import_report.json"
     unmatched_csv_path = tmp_path / "unmatched_titles.csv"

@@ -1,4 +1,4 @@
-"""Fixture tests for Textage JS parsing and decoding."""
+﻿"""Fixture tests for Textage JS parsing and decoding."""
 
 from __future__ import annotations
 
@@ -73,8 +73,8 @@ def test_charset_from_content_type_extracts_charset_token():
 @pytest.mark.light
 def test_decode_textage_response_prefers_cp932_fallback():
     """Unknown encoding responses fall back to cp932 and keep Japanese text."""
-    body = "titletbl={'k':['Raison d\'&ecirc;tre','～交差する宿命～']};".encode("cp932")
+    body = "titletbl={'k':['Raison d\'&ecirc;tre','・樔ｺ､蟾ｮ縺吶ｋ螳ｿ蜻ｽ・・]};".encode("cp932")
     response = SimpleNamespace(content=body, headers={"Content-Type": "application/javascript"})
     response.encoding = None
     decoded = _decode_textage_response(response)
-    assert "交差する宿命" in decoded
+    assert "蟾ｮ縺吶ｋ螳ｿ蜻ｽ" in decoded

@@ -219,6 +219,7 @@ def _extract_actbl_title_qualifier(act_row: object) -> str:
     return qualifier
 
 
+# pylint: disable-next=too-many-locals
 def resolve_music_title_qualifiers(
     conn: sqlite3.Connection,
     explicit_title_qualifier_by_textage_id: dict[str, str] | None = None,

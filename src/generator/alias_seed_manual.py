@@ -98,8 +98,6 @@ def _read_manual_alias_csv(csv_path: str | Path) -> list[ManualAliasCsvRow]:
                         note=note,
                     )
                 )
-    except RuntimeError:
-        raise
     except (OSError, UnicodeDecodeError, csv.Error) as exc:
         raise RuntimeError(f"failed to read manual alias CSV: {path}") from exc
 
@@ -221,4 +219,3 @@ def seed_manual_aliases_from_csv(
         inserted_manual_alias_count=inserted_count,
         skipped_redundant_manual_alias_count=skipped_redundant_count,
     )
-

@@ -1,4 +1,4 @@
-"""Fixture behavior tests for sqlite_builder."""
+"""sqlite_builder のフィクスチャ挙動テスト。"""
 
 from __future__ import annotations
 
@@ -67,6 +67,7 @@ def _read_music_row(conn: sqlite3.Connection, textage_id: str) -> tuple:
 
 @pytest.mark.light
 def test_fixture_parsing_and_missing_rows_are_ignored(tmp_path: Path):
+    """不足行を無視して有効データのみ取り込むことを確認する。"""
     sqlite_path = tmp_path / "fixture.sqlite"
 
     titletbl = {
@@ -111,6 +112,7 @@ def test_fixture_parsing_and_missing_rows_are_ignored(tmp_path: Path):
 
 @pytest.mark.light
 def test_invalid_hex_level_in_actbl_fails(tmp_path: Path):
+    """actbl の不正16進レベル値で失敗することを確認する。"""
     sqlite_path = tmp_path / "invalid_hex.sqlite"
     titletbl = {"bad": _make_title_row(title="BAD")}
     datatbl = {"bad": _make_data_row()}
@@ -129,6 +131,7 @@ def test_invalid_hex_level_in_actbl_fails(tmp_path: Path):
 
 @pytest.mark.light
 def test_lightweight_schema_minimum_constraints(tmp_path: Path):
+    """生成DBが最低限の制約と索引を持つことを確認する。"""
     sqlite_path = tmp_path / "schema_minimum.sqlite"
     build_or_update_sqlite(
         sqlite_path=str(sqlite_path),
@@ -199,6 +202,7 @@ def test_lightweight_schema_minimum_constraints(tmp_path: Path):
 
 @pytest.mark.light
 def test_diff_update_converges_and_updates_flags(tmp_path: Path):
+    """差分更新で同一曲を維持しつつ更新時刻とフラグが変化することを確認する。"""
     sqlite_path = tmp_path / "update.sqlite"
     textage_id = "song"
 
@@ -273,6 +277,7 @@ def test_diff_update_converges_and_updates_flags(tmp_path: Path):
 
 @pytest.mark.light
 def test_title_qualifier_resolution_priority_and_fallback():
+    """タイトル修飾子の優先順位とフォールバック解決を確認する。"""
     conn = sqlite3.connect(":memory:")
     try:
         ensure_schema(conn)
@@ -360,6 +365,7 @@ def test_title_qualifier_resolution_priority_and_fallback():
 
 @pytest.mark.light
 def test_build_sets_title_qualifier_from_actbl_note(tmp_path: Path):
+    """actbl の注記から title_qualifier が設定されることを確認する。"""
     sqlite_path = tmp_path / "qualifier_from_actbl.sqlite"
     titletbl = {
         "dup_ac": _make_title_row(legacy_textage_id="A101", title="DUP"),
@@ -404,6 +410,7 @@ def test_build_sets_title_qualifier_from_actbl_note(tmp_path: Path):
 
 @pytest.mark.light
 def test_build_uses_titletbl_key_as_textage_id(tmp_path: Path):
+    """textage_id として titletbl のキーが採用されることを確認する。"""
     sqlite_path = tmp_path / "textage_id_from_tag.sqlite"
     titletbl = {
         "acidvis": _make_title_row(legacy_textage_id="3905", title="ACID VISION"),
