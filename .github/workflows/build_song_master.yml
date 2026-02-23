@@ -6,8 +6,8 @@ name: Song Master CI
   push:
     branches: [main]
   schedule:
-    # 毎週日曜 18:00 UTC (月曜 03:00 JST)
-    - cron: "0 18 * * 0"
+    # 毎日 18:00 UTC (毎日 03:00 JST)
+    - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
       publish:
@@ -191,6 +191,52 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           pytest -q -m "full"
+
+      - name: Validate AC score CSV import and notify Discord
+        if: success()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import yaml
+          from src.ac_score_import import import_ac_score_csv
+
+          settings = yaml.safe_load(pathlib.Path("settings.yaml").read_text(encoding="utf-8"))
+          output_db_path = settings.get("output_db_path", "song_master.sqlite")
+          output_base = pathlib.Path(output_db_path)
+          output_dir = output_base.parent if str(output_base.parent) not in {"", "."} else pathlib.Path(".")
+
+          latest_path = output_dir / "latest.json"
+          if not latest_path.exists():
+              print(f"skip AC import validation: latest.json not found ({latest_path})")
+              raise SystemExit(0)
+
+          manifest = json.loads(latest_path.read_text(encoding="utf-8"))
+          sqlite_name = str(manifest.get("file_name") or "").strip()
+          if not sqlite_name:
+              raise RuntimeError("latest.json does not contain file_name")
+
+          sqlite_path = output_dir / sqlite_name
+          if not sqlite_path.exists():
+              raise RuntimeError(f"sqlite artifact not found: {sqlite_path}")
+
+          csv_path = pathlib.Path("data/7229-6088_dp_score.csv")
+          if not csv_path.exists():
+              print(f"skip AC import validation: CSV not found ({csv_path})")
+              raise SystemExit(0)
+
+          import_ac_score_csv(
+              sqlite_path=str(sqlite_path),
+              csv_path=str(csv_path),
+              report_path="ac_import_report.json",
+              unmatched_csv_path="ac_unmatched_titles.csv",
+              webhook_url=os.environ.get("DISCORD_WEBHOOK_URL"),
+              send_discord=True,
+          )
+          PY
 
       - name: Create draft date-tag release with artifacts
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
