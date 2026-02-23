@@ -249,7 +249,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Create draft date-tag release with artifacts
+      - name: Create date-tag release with artifacts
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -287,15 +287,13 @@ jobs:
 
           release_notes = "\n".join(
               [
-                  "## Draft release (manual publish required)",
+                  "## Automated release",
                   "",
                   "- tag: {tag} (YYYY-MM-DD or YYYY-MM-DD.N)",
                   f"- schema_version: {manifest.get('schema_version', '')}",
                   f"- generated_at: {manifest.get('generated_at', '')}",
                   f"- sha256: {manifest.get('sha256', '')}",
                   f"- byte_size: {manifest.get('byte_size', '')}",
-                  "",
-                  "This draft is created by GitHub Actions. Publish from GitHub UI after validation.",
               ]
           )
 
@@ -304,7 +302,7 @@ jobs:
               token=os.environ["GITHUB_TOKEN"],
               file_paths=[str(sqlite_path), str(latest_path)],
               generated_at=str(manifest.get("generated_at") or ""),
-              draft=True,
+              draft=False,
               release_body_template=release_notes,
           )
 
@@ -313,7 +311,7 @@ jobs:
           generated_at = str(manifest.get("generated_at", ""))
           sha256 = str(manifest.get("sha256", ""))
 
-          print(f"draft release created: tag={release_tag} url={release_url}")
+          print(f"release created: tag={release_tag} url={release_url}")
 
           webhook = os.environ.get("DISCORD_WEBHOOK_URL")
           if webhook:
@@ -321,7 +319,7 @@ jobs:
                   webhook,
                   "\n".join(
                       [
-                          "song master draft release created",
+                          "song master release created",
                           f"- release_url: {release_url}",
                           f"- tag: {release_tag}",
                           f"- generated_at: {generated_at}",

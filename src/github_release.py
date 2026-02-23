@@ -43,7 +43,7 @@ def create_release(
     repo: str,
     token: str,
     tag_name: str,
-    draft: bool = True,
+    draft: bool = False,
     body: str | None = None,
 ) -> dict:
     """Create a release for `tag_name` and return the release JSON."""
@@ -101,7 +101,7 @@ def create_date_tag_release(
     token: str,
     generated_at: str | None = None,
     max_suffix: int = 200,
-    draft: bool = True,
+    draft: bool = False,
     release_body_template: str | None = None,
 ) -> dict:
     """
@@ -213,7 +213,7 @@ def publish_files_as_new_date_release(
     file_paths: list[str],
     generated_at: str | None = None,
     max_suffix: int = 200,
-    draft: bool = True,
+    draft: bool = False,
     release_body_template: str | None = None,
 ) -> dict:
     """
