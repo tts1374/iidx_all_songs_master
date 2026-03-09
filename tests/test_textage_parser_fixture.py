@@ -47,6 +47,21 @@ def test_extract_js_object_with_minimal_datatbl_and_actbl():
 
 
 @pytest.mark.light
+def test_extract_js_object_with_actbl_constant_flag_keeps_positive_value():
+    """actbl constants must keep numeric sign (e.g., F=15 -> 15)."""
+    js = """
+    F=15;
+    actbl={
+      "k1":[F,0,0,A,7,B]
+    };
+    """
+    parsed = _extract_js_object(js, "actbl")
+    assert parsed["k1"][0] == 15
+    assert parsed["k1"][3] == "A"
+    assert parsed["k1"][5] == "B"
+
+
+@pytest.mark.light
 def test_extract_js_object_raises_for_missing_varname():
     """Missing variable name raises RuntimeError."""
     js = "var a={};"

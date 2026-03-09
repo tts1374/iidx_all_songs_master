@@ -61,7 +61,9 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
     Extract and parse `varname = {...}` object from JS source text.
 
     Preprocess steps:
-    - Replace constants (e.g., `SS=35`) with negative value convention used in this project.
+    - Replace constants (e.g., `SS=35`).
+      For `titletbl`, constants are converted to project convention negative values.
+      For other tables, constants keep their numeric sign.
     - Strip line comments.
     - Strip `.fontcolor(...)` decorations.
     - Convert single-quoted object keys to JSON-compatible double quotes.
@@ -111,7 +113,8 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
 
     consts = dict(re.findall(r"([A-Z_][A-Z0-9_]*)\s*=\s*([0-9]+)\s*;", js_text))
     for name, val in consts.items():
-        obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", f"-{val}", obj_text)
+        replacement = f"-{val}" if varname == "titletbl" else val
+        obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", replacement, obj_text)
 
     obj_text = _strip_js_line_comments(obj_text)
     obj_text = re.sub(r"\.fontcolor\([^)]*\)", "", obj_text)
