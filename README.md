@@ -175,6 +175,48 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | 2 | 長すぎる場合は Top5 に縮小 |
 | 3 | さらに長い場合は未一致一覧を省略 |
 
+## INF リソース同定レポート生成物（`src/inf_score_import.py`）
+
+### 生成物一覧
+
+| 生成物 | 既定名 | 役割 |
+| --- | --- | --- |
+| レポート JSON | `inf_import_report.json` | INF リソース同定結果のサマリ |
+| 未一致 CSV | `inf_unmatched_titles.csv` | 未一致タイトルの件数一覧 |
+
+### `inf_import_report.json` 主なキー定義
+
+| キー | 型 | 説明 |
+| --- | --- | --- |
+| `source_informations_file` | `string` | 入力 `informations4.0.res` パス |
+| `source_musictable_file` | `string` | 入力 `musictable1.1.res` パス |
+| `alias_scope` | `string` | 固定で `inf` |
+| `total_song_rows` | `number` | 同定対象総件数（`informations.music.musics`） |
+| `matched_song_rows` | `number` | 同定成功件数 |
+| `unmatched_song_rows` | `number` | 同定失敗件数 |
+| `match_rate` | `number` | 一致率（%） |
+| `unmatched_titles_topN` | `array` | 未一致上位（最大 10 件） |
+| `informations_song_rows` | `number` | `informations` 側件数 |
+| `musictable_song_rows` | `number` | `musictable` 側件数 |
+| `titles_only_in_informations_count` | `number` | `informations` のみに存在する曲数 |
+| `titles_only_in_musictable_count` | `number` | `musictable` のみに存在する曲数 |
+| `generated_at` | `string` | UTC ISO8601 (`Z` suffix) |
+
+### `inf_unmatched_titles.csv` 列定義
+
+| 列名 | 型 | 説明 |
+| --- | --- | --- |
+| `title` | `string` | 未一致タイトル |
+| `count` | `number` | 出現回数 |
+
+### Discord 通知フォールバック
+
+| 段階 | 内容 |
+| --- | --- |
+| 1 | 未一致 Top10 を本文に含めて送信 |
+| 2 | 長すぎる場合は Top5 に縮小 |
+| 3 | さらに長い場合は未一致一覧を省略 |
+
 ## ビルドフロー（`main.py`）
 
 | 手順 | 処理 | 生成/検証物 |
@@ -252,6 +294,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | --- | --- |
 | SQLite / `latest.json` 生成 | `python main.py` |
 | AC スコア同定レポート生成 | `python src/ac_score_import.py <AC_SCORE_CSV_PATH> --sqlite-path song_master.sqlite --report-path import_report.json --unmatched-csv-path unmatched_titles.csv` |
+| INF リソース同定レポート生成 | `python src/inf_score_import.py data/informations4.0.res data/musictable1.1.res --sqlite-path song_master.sqlite --report-path inf_import_report.json --unmatched-csv-path inf_unmatched_titles.csv` |
 
 ## CI / リリース運用
 
@@ -274,4 +317,3 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | 新規公開 | 常に日付タグで新規作成 |
 | タグ形式 | `YYYY-MM-DD` / `YYYY-MM-DD.N` |
 | アセット更新 | 置換ではなく追加アップロード |
-
