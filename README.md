@@ -294,7 +294,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | --- | --- |
 | SQLite / `latest.json` 生成 | `python main.py` |
 | AC スコア同定レポート生成 | `python src/ac_score_import.py <AC_SCORE_CSV_PATH> --sqlite-path song_master.sqlite --report-path import_report.json --unmatched-csv-path unmatched_titles.csv` |
-| INF リソース同定レポート生成 | `python src/inf_score_import.py data/informations4.0.res data/musictable1.1.res --sqlite-path song_master.sqlite --report-path inf_import_report.json --unmatched-csv-path inf_unmatched_titles.csv` |
+| INF リソース同定レポート生成 | `python src/inf_score_import.py data/informations4.1.res data/musictable1.2.res --sqlite-path song_master.sqlite --report-path inf_import_report.json --unmatched-csv-path inf_unmatched_titles.csv` |
 
 ## CI / リリース運用
 

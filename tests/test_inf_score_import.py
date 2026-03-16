@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import pickle
 import sqlite3
+import gzip
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,7 @@ def _write_res_files(
     tmp_path: Path,
     information_titles: list[str],
     musictable_titles: list[str],
+    compress: bool = False,
 ) -> tuple[Path, Path]:
     informations_path = tmp_path / "informations4.0.res"
     musictable_path = tmp_path / "musictable1.1.res"
@@ -75,10 +77,14 @@ def _write_res_files(
         "leggendarias": [],
     }
 
-    with informations_path.open("wb") as file_obj:
-        pickle.dump(informations, file_obj, protocol=4)
-    with musictable_path.open("wb") as file_obj:
-        pickle.dump(musictable, file_obj, protocol=4)
+    info_payload = pickle.dumps(informations, protocol=4)
+    musictable_payload = pickle.dumps(musictable, protocol=4)
+    if compress:
+        info_payload = gzip.compress(info_payload)
+        musictable_payload = gzip.compress(musictable_payload)
+
+    informations_path.write_bytes(info_payload)
+    musictable_path.write_bytes(musictable_payload)
 
     return informations_path, musictable_path
 
@@ -178,6 +184,36 @@ def test_import_fails_when_res_structure_is_invalid(tmp_path: Path):
             unmatched_csv_path=str(tmp_path / "inf_unmatched_titles.csv"),
             send_discord=False,
         )
+
+
+@pytest.mark.light
+def test_import_supports_gzip_compressed_res(tmp_path: Path):
+    """Gzip-compressed .res files should be supported."""
+    sqlite_path = tmp_path / "song_master.sqlite"
+    report_path = tmp_path / "inf_import_report.json"
+    unmatched_csv_path = tmp_path / "inf_unmatched_titles.csv"
+    informations_path, musictable_path = _write_res_files(
+        tmp_path,
+        information_titles=["Song A", "Song B"],
+        musictable_titles=["Song A", "Song B"],
+        compress=True,
+    )
+    _seed_aliases(
+        sqlite_path,
+        [("T001", "Song A", "official"), ("T002", "Song B", "manual")],
+    )
+
+    report = import_inf_score_res(
+        sqlite_path=str(sqlite_path),
+        informations_path=str(informations_path),
+        musictable_path=str(musictable_path),
+        report_path=str(report_path),
+        unmatched_csv_path=str(unmatched_csv_path),
+        send_discord=False,
+    )
+
+    assert report["matched_song_rows"] == 2
+    assert report["unmatched_song_rows"] == 0
 
 
 @pytest.mark.light

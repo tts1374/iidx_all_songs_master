@@ -247,6 +247,7 @@ jobs:
           import json
           import os
           import pathlib
+          import re
           import yaml
           from src.inf_score_import import import_inf_score_res
 
@@ -269,14 +270,31 @@ jobs:
           if not sqlite_path.exists():
               raise RuntimeError(f"sqlite artifact not found: {sqlite_path}")
 
-          informations_path = pathlib.Path("data/informations4.0.res")
-          musictable_path = pathlib.Path("data/musictable1.1.res")
-          if not informations_path.exists():
-              print(f"skip INF import validation: informations .res not found ({informations_path})")
+          def resolve_latest_res(prefix: str) -> pathlib.Path | None:
+              candidates = list(pathlib.Path("data").glob(f"{prefix}*.res"))
+              if not candidates:
+                  return None
+
+              pattern = re.compile(rf"^{re.escape(prefix)}([0-9]+(?:\\.[0-9]+)*)\\.res$")
+
+              def version_key(path: pathlib.Path) -> tuple[int, ...]:
+                  match = pattern.match(path.name)
+                  if match is None:
+                      return (-1,)
+                  return tuple(int(part) for part in match.group(1).split("."))
+
+              candidates.sort(key=lambda path: (version_key(path), path.name))
+              return candidates[-1]
+
+          informations_path = resolve_latest_res("informations")
+          musictable_path = resolve_latest_res("musictable")
+          if informations_path is None:
+              print("skip INF import validation: informations*.res not found in data/")
               raise SystemExit(0)
-          if not musictable_path.exists():
-              print(f"skip INF import validation: musictable .res not found ({musictable_path})")
+          if musictable_path is None:
+              print("skip INF import validation: musictable*.res not found in data/")
               raise SystemExit(0)
+          print(f"INF validation targets: {informations_path.name}, {musictable_path.name}")
 
           import_inf_score_res(
               sqlite_path=str(sqlite_path),

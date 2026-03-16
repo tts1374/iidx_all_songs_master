@@ -1,1 +1,0 @@
-C:/work/inf-notebook/resources/informations4.0.res

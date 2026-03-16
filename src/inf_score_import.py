@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 import io
 import json
 import logging
@@ -77,6 +78,14 @@ class _FakeNumpyNdArray:
     def __setstate__(self, state: Any) -> None:
         self.state = state
 
+    def reshape(self, *shape: Any) -> "_FakeNumpyNdArray":
+        """Mimic ndarray.reshape for pickle compatibility."""
+        if len(shape) == 1 and isinstance(shape[0], tuple):
+            self.shape = shape[0]
+        else:
+            self.shape = shape
+        return self
+
 
 def _safe_numpy_scalar(_dtype: Any, raw_bytes: Any) -> Any:
     """Decode simple scalar payloads found in resources without numpy runtime."""
@@ -90,14 +99,33 @@ def _safe_numpy_reconstruct(_subtype: Any, shape: Any, dtype: Any) -> _FakeNumpy
     return _FakeNumpyNdArray(shape=shape, dtype=dtype)
 
 
+def _safe_numpy_frombuffer(
+    raw_buffer: Any,
+    dtype: Any = None,
+    count: Any = -1,
+    offset: Any = 0,
+) -> _FakeNumpyNdArray:
+    """Mimic numpy._core.numeric._frombuffer for pickle compatibility."""
+    array = _FakeNumpyNdArray(shape=None, dtype=dtype)
+    normalized_count = count if isinstance(count, int) else -1
+    normalized_offset = offset if isinstance(offset, int) else 0
+    if isinstance(raw_buffer, (bytes, bytearray)):
+        sliced = raw_buffer[normalized_offset:] if normalized_offset > 0 else raw_buffer
+        array.state = {"buffer": sliced, "count": normalized_count}
+    return array
+
+
 class _ResUnpickler(pickle.Unpickler):
     """Restricted unpickler for inf-notebook .res resources."""
 
     ALLOWED_GLOBALS: dict[tuple[str, str], Any] = {
         ("builtins", "slice"): slice,
         ("numpy.core.multiarray", "scalar"): _safe_numpy_scalar,
+        ("numpy._core.multiarray", "scalar"): _safe_numpy_scalar,
         ("numpy", "dtype"): _FakeNumpyDType,
         ("numpy.core.multiarray", "_reconstruct"): _safe_numpy_reconstruct,
+        ("numpy._core.multiarray", "_reconstruct"): _safe_numpy_reconstruct,
+        ("numpy._core.numeric", "_frombuffer"): _safe_numpy_frombuffer,
         ("numpy", "ndarray"): _FakeNumpyNdArray,
     }
 
@@ -112,7 +140,10 @@ def _load_res_object(path: str) -> dict:
     """Load one `.res` resource file with restricted pickle globals."""
     try:
         with open(path, "rb") as file_obj:
-            loaded = _ResUnpickler(io.BytesIO(file_obj.read())).load()
+            raw = file_obj.read()
+            if raw.startswith(b"\x1f\x8b"):
+                raw = gzip.decompress(raw)
+            loaded = _ResUnpickler(io.BytesIO(raw)).load()
     except (OSError, pickle.PickleError, EOFError, AttributeError) as exc:
         raise RuntimeError(f"Failed to load .res file: {path}") from exc
 
