@@ -89,6 +89,14 @@ def _write_res_files(
     return informations_path, musictable_path
 
 
+def _write_tracker_tsv(tmp_path: Path, tracker_titles: list[str]) -> Path:
+    tracker_path = tmp_path / "tracker.tsv"
+    lines = ["title\tType"]
+    lines.extend(f"{title}\tBase" for title in tracker_titles)
+    tracker_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return tracker_path
+
+
 @pytest.mark.light
 def test_import_reports_match_counts_and_outputs_artifacts(tmp_path: Path):
     """Import report counts and output files are generated as expected."""
@@ -122,6 +130,8 @@ def test_import_reports_match_counts_and_outputs_artifacts(tmp_path: Path):
     assert report["match_rate"] == 50.0
     assert report["informations_song_rows"] == 4
     assert report["musictable_song_rows"] == 3
+    assert report["tracker_song_rows"] == 0
+    assert report["source_tracker_file"] is None
     assert report["titles_only_in_informations_count"] == 0
     assert report["titles_only_in_musictable_count"] == 0
     assert report["unmatched_titles_topN"] == [{"title": "Unknown Song", "count": 2}]
@@ -214,6 +224,48 @@ def test_import_supports_gzip_compressed_res(tmp_path: Path):
 
     assert report["matched_song_rows"] == 2
     assert report["unmatched_song_rows"] == 0
+
+
+@pytest.mark.light
+def test_import_includes_tracker_titles_in_alias_matching(tmp_path: Path):
+    """tracker.tsv titles should participate in the same INF alias exact match logic."""
+    sqlite_path = tmp_path / "song_master.sqlite"
+    report_path = tmp_path / "inf_import_report.json"
+    unmatched_csv_path = tmp_path / "inf_unmatched_titles.csv"
+    tracker_path = _write_tracker_tsv(
+        tmp_path,
+        tracker_titles=["Song B", "Unknown Tracker", "Unknown Tracker"],
+    )
+    informations_path, musictable_path = _write_res_files(
+        tmp_path,
+        information_titles=["Song A"],
+        musictable_titles=["Song A"],
+    )
+    _seed_aliases(
+        sqlite_path,
+        [("T001", "Song A", "official"), ("T002", "Song B", "manual")],
+    )
+
+    report = import_inf_score_res(
+        sqlite_path=str(sqlite_path),
+        informations_path=str(informations_path),
+        musictable_path=str(musictable_path),
+        report_path=str(report_path),
+        unmatched_csv_path=str(unmatched_csv_path),
+        send_discord=False,
+        tracker_tsv_path=str(tracker_path),
+    )
+
+    assert report["total_song_rows"] == 4
+    assert report["matched_song_rows"] == 2
+    assert report["unmatched_song_rows"] == 2
+    assert report["tracker_song_rows"] == 3
+    assert report["source_tracker_file"] == str(tracker_path)
+    assert report["unmatched_titles_topN"] == [{"title": "Unknown Tracker", "count": 2}]
+
+    lines = unmatched_csv_path.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "title,count"
+    assert lines[1] == "Unknown Tracker,2"
 
 
 @pytest.mark.light

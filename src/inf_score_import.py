@@ -20,6 +20,7 @@ import requests
 import yaml
 
 ALIAS_SCOPE_INF = "inf"
+TRACKER_TITLE_COLUMN = "title"
 DISCORD_SAFE_LIMIT = 1900
 UNMATCHED_TOP_N = 10
 
@@ -55,6 +56,28 @@ def load_inf_alias_map(conn: sqlite3.Connection) -> dict[str, str]:
 
 def _sorted_unmatched(counter: Counter[str]) -> list[tuple[str, int]]:
     return sorted(counter.items(), key=lambda item: (-item[1], item[0]))
+
+
+def load_tracker_titles(tracker_tsv_path: str) -> list[str]:
+    """Load tracker.tsv and return titles from the `title` column."""
+    try:
+        with open(tracker_tsv_path, "r", encoding="utf-8-sig", newline="") as file_obj:
+            reader = csv.DictReader(file_obj, delimiter="\t")
+            if not reader.fieldnames or TRACKER_TITLE_COLUMN not in reader.fieldnames:
+                raise RuntimeError(
+                    f"tracker TSV missing required column: {TRACKER_TITLE_COLUMN}"
+                )
+
+            return [
+                str(row[TRACKER_TITLE_COLUMN]).strip()
+                if row[TRACKER_TITLE_COLUMN] is not None
+                else ""
+                for row in reader
+            ]
+    except RuntimeError:
+        raise
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        raise RuntimeError(f"Failed to read tracker TSV: {tracker_tsv_path}") from exc
 
 
 class _FakeNumpyDType:
@@ -183,11 +206,17 @@ def _extract_titles_from_res_objects(
 def load_inf_source_titles(
     informations_path: str,
     musictable_path: str,
-) -> tuple[list[str], list[str]]:
+    tracker_tsv_path: str | None = None,
+) -> tuple[list[str], list[str], list[str]]:
     """Load INF source resources and return title lists."""
     informations_obj = _load_res_object(informations_path)
     musictable_obj = _load_res_object(musictable_path)
-    return _extract_titles_from_res_objects(informations_obj, musictable_obj)
+    info_titles, musictable_titles = _extract_titles_from_res_objects(
+        informations_obj,
+        musictable_obj,
+    )
+    tracker_titles = load_tracker_titles(tracker_tsv_path) if tracker_tsv_path else []
+    return info_titles, musictable_titles, tracker_titles
 
 
 def _identify_titles(
@@ -211,11 +240,13 @@ def _identify_titles(
 def generate_import_report(
     source_informations_file: str,
     source_musictable_file: str,
+    source_tracker_file: str | None,
     total_song_rows: int,
     matched_song_rows: int,
     unmatched_titles: Counter[str],
     informations_song_rows: int,
     musictable_song_rows: int,
+    tracker_song_rows: int,
     titles_only_in_informations: set[str],
     titles_only_in_musictable: set[str],
 ) -> dict:
@@ -232,6 +263,7 @@ def generate_import_report(
     return {
         "source_informations_file": str(source_informations_file),
         "source_musictable_file": str(source_musictable_file),
+        "source_tracker_file": str(source_tracker_file) if source_tracker_file else None,
         "alias_scope": ALIAS_SCOPE_INF,
         "total_song_rows": int(total_song_rows),
         "matched_song_rows": int(matched_song_rows),
@@ -240,6 +272,7 @@ def generate_import_report(
         "unmatched_titles_topN": top_unmatched,
         "informations_song_rows": int(informations_song_rows),
         "musictable_song_rows": int(musictable_song_rows),
+        "tracker_song_rows": int(tracker_song_rows),
         "titles_only_in_informations_count": len(titles_only_in_informations),
         "titles_only_in_musictable_count": len(titles_only_in_musictable),
         "titles_only_in_informations_topN": sorted(titles_only_in_informations)[:UNMATCHED_TOP_N],
@@ -253,6 +286,8 @@ def print_report_summary(report: dict) -> None:
     print("INF resource alias identification report")
     print(f"- source_informations_file: {report['source_informations_file']}")
     print(f"- source_musictable_file: {report['source_musictable_file']}")
+    if report.get("source_tracker_file"):
+        print(f"- source_tracker_file: {report['source_tracker_file']}")
     print(f"- alias_scope: {report['alias_scope']}")
     print(f"- total_song_rows: {report['total_song_rows']}")
     print(f"- matched_song_rows: {report['matched_song_rows']}")
@@ -261,7 +296,8 @@ def print_report_summary(report: dict) -> None:
     print(
         "- source_title_counts: "
         f"informations={report['informations_song_rows']}, "
-        f"musictable={report['musictable_song_rows']}"
+        f"musictable={report['musictable_song_rows']}, "
+        f"tracker={report['tracker_song_rows']}"
     )
     print(
         "- source_set_gap_counts: "
@@ -397,6 +433,7 @@ def import_inf_score_res(
     webhook_url: str | None = None,
     settings_path: str = "settings.yaml",
     send_discord: bool = True,
+    tracker_tsv_path: str | None = None,
 ) -> dict:
     """Import INF resources, generate alias identification report, and notify Discord."""
     conn = sqlite3.connect(sqlite_path)
@@ -405,25 +442,26 @@ def import_inf_score_res(
     finally:
         conn.close()
 
-    information_titles, musictable_titles = load_inf_source_titles(
+    information_titles, musictable_titles, tracker_titles = load_inf_source_titles(
         informations_path=informations_path,
         musictable_path=musictable_path,
+        tracker_tsv_path=tracker_tsv_path,
     )
-    total_song_rows, matched_song_rows, unmatched_titles = _identify_titles(
-        information_titles,
-        alias_map,
-    )
+    source_titles = [*information_titles, *tracker_titles]
+    total_song_rows, matched_song_rows, unmatched_titles = _identify_titles(source_titles, alias_map)
 
     titles_only_in_informations = set(information_titles) - set(musictable_titles)
     titles_only_in_musictable = set(musictable_titles) - set(information_titles)
     report = generate_import_report(
         source_informations_file=informations_path,
         source_musictable_file=musictable_path,
+        source_tracker_file=tracker_tsv_path,
         total_song_rows=total_song_rows,
         matched_song_rows=matched_song_rows,
         unmatched_titles=unmatched_titles,
         informations_song_rows=len(information_titles),
         musictable_song_rows=len(musictable_titles),
+        tracker_song_rows=len(tracker_titles),
         titles_only_in_informations=titles_only_in_informations,
         titles_only_in_musictable=titles_only_in_musictable,
     )
@@ -466,6 +504,11 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         default="settings.yaml",
         help="Path to settings file used when DISCORD_WEBHOOK_URL is not set",
     )
+    parser.add_argument(
+        "--tracker-tsv-path",
+        default=None,
+        help="Path to tracker.tsv title source (auto-detects data/tracker.tsv when present)",
+    )
     parser.add_argument("--webhook-url", default=None, help="Override Discord webhook URL")
     parser.add_argument(
         "--no-discord",
@@ -479,6 +522,10 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     parser = _build_cli_parser()
     args = parser.parse_args(argv)
+    tracker_tsv_path = args.tracker_tsv_path
+    default_tracker_path = Path("data/tracker.tsv")
+    if tracker_tsv_path is None and default_tracker_path.exists():
+        tracker_tsv_path = str(default_tracker_path)
 
     import_inf_score_res(
         sqlite_path=args.sqlite_path,
@@ -489,6 +536,7 @@ def main(argv: list[str] | None = None) -> int:
         webhook_url=args.webhook_url,
         settings_path=args.settings_path,
         send_discord=not args.no_discord,
+        tracker_tsv_path=tracker_tsv_path,
     )
     return 0
 

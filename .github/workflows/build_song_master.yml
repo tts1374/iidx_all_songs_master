@@ -288,6 +288,7 @@ jobs:
 
           informations_path = resolve_latest_res("informations")
           musictable_path = resolve_latest_res("musictable")
+          tracker_tsv_path = pathlib.Path("data/tracker.tsv")
           if informations_path is None:
               print("skip INF import validation: informations*.res not found in data/")
               raise SystemExit(0)
@@ -295,6 +296,10 @@ jobs:
               print("skip INF import validation: musictable*.res not found in data/")
               raise SystemExit(0)
           print(f"INF validation targets: {informations_path.name}, {musictable_path.name}")
+          if tracker_tsv_path.exists():
+              print(f"INF validation tracker source: {tracker_tsv_path}")
+          else:
+              print("INF validation tracker source: none")
 
           import_inf_score_res(
               sqlite_path=str(sqlite_path),
@@ -304,6 +309,7 @@ jobs:
               unmatched_csv_path="inf_unmatched_titles.csv",
               webhook_url=os.environ.get("DISCORD_WEBHOOK_URL"),
               send_discord=True,
+              tracker_tsv_path=str(tracker_tsv_path) if tracker_tsv_path.exists() else None,
           )
           PY
 

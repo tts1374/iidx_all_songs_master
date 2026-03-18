@@ -216,14 +216,16 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | --- | --- | --- |
 | `source_informations_file` | `string` | 入力 `informations4.0.res` パス |
 | `source_musictable_file` | `string` | 入力 `musictable1.1.res` パス |
+| `source_tracker_file` | `string \| null` | 入力 `tracker.tsv` パス（未使用時は `null`） |
 | `alias_scope` | `string` | 固定で `inf` |
-| `total_song_rows` | `number` | 同定対象総件数（`informations.music.musics`） |
+| `total_song_rows` | `number` | 同定対象総件数（`informations.music.musics` + `tracker.tsv` の `title` 列） |
 | `matched_song_rows` | `number` | 同定成功件数 |
 | `unmatched_song_rows` | `number` | 同定失敗件数 |
 | `match_rate` | `number` | 一致率（%） |
 | `unmatched_titles_topN` | `array` | 未一致上位（最大 10 件） |
 | `informations_song_rows` | `number` | `informations` 側件数 |
 | `musictable_song_rows` | `number` | `musictable` 側件数 |
+| `tracker_song_rows` | `number` | `tracker.tsv` 側件数 |
 | `titles_only_in_informations_count` | `number` | `informations` のみに存在する曲数 |
 | `titles_only_in_musictable_count` | `number` | `musictable` のみに存在する曲数 |
 | `generated_at` | `string` | UTC ISO8601 (`Z` suffix) |
@@ -330,6 +332,7 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 - `GITHUB_TOKEN` 未設定でも `python main.py` は実行できます（公開・前回リリース取得は自動でスキップ）。
 - `DISCORD_WEBHOOK_URL` 未設定時は通知を送らず処理継続します。
 - 取り込みレポート系を通知なしで実行する場合は `--no-discord` を指定します。
+- `python src/inf_score_import.py ...` は `data/tracker.tsv` が存在する場合、自動で `title` 列も同定対象へ追加します。別パスを使う場合は `--tracker-tsv-path <TSV_PATH>` を指定します。
 
 ## CI / リリース運用
 
