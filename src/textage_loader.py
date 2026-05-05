@@ -113,6 +113,21 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
             if ch in ('"', "'"):
                 in_str = True
                 str_char = ch
+            elif ch == "/" and index + 1 < len(js_text) and js_text[index + 1] == "/":
+                index += 2
+                while index < len(js_text) and js_text[index] != "\n":
+                    index += 1
+                continue
+            elif ch == "/" and index + 1 < len(js_text) and js_text[index + 1] == "*":
+                index += 2
+                while index + 1 < len(js_text) and not (
+                    js_text[index] == "*" and js_text[index + 1] == "/"
+                ):
+                    index += 1
+                if index + 1 >= len(js_text):
+                    break
+                index += 2
+                continue
             elif ch == "{":
                 depth += 1
             elif ch == "}":
