@@ -445,7 +445,9 @@ def _load_inf_unlock_overrides_from_csv(
 ) -> list[InfUnlockOverrideRow]:
     """Load optional INF unlock overrides from CSV."""
     resolved_csv_path = (
-        inf_unlock_override_csv_path or DEFAULT_INF_UNLOCK_OVERRIDE_CSV_PATH
+        DEFAULT_INF_UNLOCK_OVERRIDE_CSV_PATH
+        if inf_unlock_override_csv_path is None
+        else inf_unlock_override_csv_path
     )
     if not resolved_csv_path or not os.path.exists(resolved_csv_path):
         return []
