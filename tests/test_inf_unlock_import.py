@@ -136,6 +136,7 @@ def test_apply_inf_unlock_information_updates_music_with_alias_exact_match(
             conn=conn,
             inf_music_index_url="https://example.invalid/inf",
             inf_pack_csv_path=str(inf_pack_csv_path),
+            inf_unlock_override_csv_path="",
         )
         conn.commit()
 
@@ -207,6 +208,7 @@ def test_apply_inf_unlock_information_skips_pack_when_pack_name_not_in_csv(
             conn=conn,
             inf_music_index_url="https://example.invalid/inf",
             inf_pack_csv_path=str(inf_pack_csv_path),
+            inf_unlock_override_csv_path="",
         )
         conn.commit()
 

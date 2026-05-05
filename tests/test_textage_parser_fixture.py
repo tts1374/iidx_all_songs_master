@@ -96,6 +96,36 @@ def test_extract_js_object_keeps_double_slash_inside_titletbl_strings():
 
 
 @pytest.mark.light
+def test_extract_js_object_strips_block_comments_outside_strings():
+    """Block comments in Textage rows must be stripped without touching strings."""
+    js = """
+    titletbl={
+      "acidvis":[33,3905,1,"DRUM & BASS"/*"LIQUID FUNK"*/,"L.E.D.","ACID VISION"],
+      "commentstr":[33,3906,1,"GENRE /* literal */","ARTIST","TITLE"]
+    };
+    """
+    parsed = _extract_js_object(js, "titletbl")
+    assert parsed["acidvis"][3] == "DRUM & BASS"
+    assert parsed["commentstr"][3] == "GENRE /* literal */"
+
+
+@pytest.mark.light
+def test_extract_js_object_ignores_comment_braces_while_finding_object_end():
+    """Comment braces before the real object end must not truncate extraction."""
+    js = """
+    titletbl={
+      "k1":[33,3905,1,"GENRE","ARTIST","TITLE"],
+      /* commented-out note with } before the real table end */
+      // line comment with }
+      "k2":[33,3906,1,"GENRE","ARTIST","TITLE /* literal } */"]
+    };
+    """
+    parsed = _extract_js_object(js, "titletbl")
+    assert sorted(parsed) == ["k1", "k2"]
+    assert parsed["k2"][5] == "TITLE /* literal } */"
+
+
+@pytest.mark.light
 def test_charset_from_content_type_extracts_charset_token():
     """Content-Type charset token is parsed correctly."""
     value = "application/javascript; charset=Shift_JIS"

@@ -14,8 +14,8 @@ ACT_URL = "https://textage.cc/score/actbl.js"
 CONTENT_TYPE_CHARSET_RE = re.compile(r"charset\s*=\s*([A-Za-z0-9._-]+)", flags=re.I)
 
 
-def _strip_js_line_comments(js_text: str) -> str:
-    """Strip JS // comments while preserving // inside string literals."""
+def _strip_js_comments(js_text: str) -> str:
+    """Strip JS comments while preserving comment markers inside string literals."""
     out: list[str] = []
     index = 0
     in_str = False
@@ -49,10 +49,26 @@ def _strip_js_line_comments(js_text: str) -> str:
                 index += 1
             continue
 
+        if ch == "/" and index + 1 < len(js_text) and js_text[index + 1] == "*":
+            index += 2
+            while index + 1 < len(js_text) and not (
+                js_text[index] == "*" and js_text[index + 1] == "/"
+            ):
+                index += 1
+            if index + 1 >= len(js_text):
+                break
+            index += 2
+            continue
+
         out.append(ch)
         index += 1
 
     return "".join(out)
+
+
+def _strip_js_line_comments(js_text: str) -> str:
+    """Backward-compatible wrapper for stripping JS comments."""
+    return _strip_js_comments(js_text)
 
 
 # pylint: disable-next=too-many-locals,too-many-branches,too-many-statements
@@ -97,6 +113,21 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
             if ch in ('"', "'"):
                 in_str = True
                 str_char = ch
+            elif ch == "/" and index + 1 < len(js_text) and js_text[index + 1] == "/":
+                index += 2
+                while index < len(js_text) and js_text[index] != "\n":
+                    index += 1
+                continue
+            elif ch == "/" and index + 1 < len(js_text) and js_text[index + 1] == "*":
+                index += 2
+                while index + 1 < len(js_text) and not (
+                    js_text[index] == "*" and js_text[index + 1] == "/"
+                ):
+                    index += 1
+                if index + 1 >= len(js_text):
+                    break
+                index += 2
+                continue
             elif ch == "{":
                 depth += 1
             elif ch == "}":
@@ -116,7 +147,7 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
         replacement = f"-{val}" if varname == "titletbl" else val
         obj_text = re.sub(rf"(?<![\"'])\b{name}\b(?![\"'])", replacement, obj_text)
 
-    obj_text = _strip_js_line_comments(obj_text)
+    obj_text = _strip_js_comments(obj_text)
     obj_text = re.sub(r"\.fontcolor\([^)]*\)", "", obj_text)
     obj_text = re.sub(r"'([^']*?)'(\s*):", r'"\1"\2:', obj_text)
 
