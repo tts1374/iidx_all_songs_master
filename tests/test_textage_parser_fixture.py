@@ -1,4 +1,4 @@
-﻿"""Fixture tests for Textage JS parsing and decoding."""
+"""Fixture tests for Textage JS parsing and decoding."""
 
 from __future__ import annotations
 
@@ -59,6 +59,22 @@ def test_extract_js_object_with_actbl_constant_flag_keeps_positive_value():
     assert parsed["k1"][0] == 15
     assert parsed["k1"][3] == "A"
     assert parsed["k1"][5] == "B"
+
+
+@pytest.mark.light
+def test_extract_js_object_fills_sparse_actbl_array_elements():
+    """JavaScript array elisions in actbl are treated as unavailable values."""
+    js = """
+    actbl={
+      'leading':[,0,0,5],
+      'middle':[3,0,,5],
+      'string':[3,0,"literal [, value",5]
+    };
+    """
+    parsed = _extract_js_object(js, "actbl")
+    assert parsed["leading"] == [0, 0, 0, 5]
+    assert parsed["middle"] == [3, 0, 0, 5]
+    assert parsed["string"] == [3, 0, "literal [, value", 5]
 
 
 @pytest.mark.light

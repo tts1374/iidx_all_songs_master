@@ -1,4 +1,4 @@
-﻿"""Load Textage JS tables and parse them into Python dicts."""
+"""Load Textage JS tables and parse them into Python dicts."""
 
 from __future__ import annotations
 
@@ -69,6 +69,47 @@ def _strip_js_comments(js_text: str) -> str:
 def _strip_js_line_comments(js_text: str) -> str:
     """Backward-compatible wrapper for stripping JS comments."""
     return _strip_js_comments(js_text)
+
+
+def _fill_sparse_array_elements(js_text: str, replacement: str = "0") -> str:
+    """Replace JavaScript array elisions with an explicit value."""
+    out: list[str] = []
+    in_str = False
+    escaped = False
+    str_char = ""
+    array_depth = 0
+    previous_significant = ""
+
+    for ch in js_text:
+        if in_str:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == str_char:
+                in_str = False
+            continue
+
+        if ch in ('"', "'"):
+            in_str = True
+            str_char = ch
+            previous_significant = ch
+            out.append(ch)
+            continue
+
+        if ch == "[":
+            array_depth += 1
+        elif ch == "]":
+            array_depth = max(0, array_depth - 1)
+        elif ch == "," and array_depth > 0 and previous_significant in ("[", ","):
+            out.append(replacement)
+
+        out.append(ch)
+        if not ch.isspace():
+            previous_significant = ch
+
+    return "".join(out)
 
 
 # pylint: disable-next=too-many-locals,too-many-branches,too-many-statements
@@ -150,6 +191,7 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
     obj_text = _strip_js_comments(obj_text)
     obj_text = re.sub(r"\.fontcolor\([^)]*\)", "", obj_text)
     obj_text = re.sub(r"'([^']*?)'(\s*):", r'"\1"\2:', obj_text)
+    obj_text = _fill_sparse_array_elements(obj_text)
 
     obj_text = re.sub(r"(?<=,)([A-F])(?=,)", r'"\1"', obj_text)
     obj_text = re.sub(r"(?<=\[)([A-F])(?=,)", r'"\1"', obj_text)
