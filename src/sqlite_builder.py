@@ -1261,14 +1261,23 @@ def upsert_meta(
     conn.commit()
 
 
-def reset_all_music_active_flags(conn: sqlite3.Connection):
-    """取り込み前に収録フラグを全件リセットする。"""
+def reset_all_scope_active_flags(conn: sqlite3.Connection):
+    """取り込み前に music/chart のスコープ収録フラグを全件リセットする。"""
     cur = conn.cursor()
     now = now_iso()
 
     cur.execute(
         """
     UPDATE music SET
+        is_ac_active = 0,
+        is_inf_active = 0,
+        updated_at = ?
+    """,
+        (now,),
+    )
+    cur.execute(
+        """
+    UPDATE chart SET
         is_ac_active = 0,
         is_inf_active = 0,
         updated_at = ?
@@ -1538,7 +1547,7 @@ def build_or_update_sqlite(
     ensure_schema(conn)
 
     if reset_flags:
-        reset_all_music_active_flags(conn)
+        reset_all_scope_active_flags(conn)
 
     music_processed = 0
     chart_processed = 0
