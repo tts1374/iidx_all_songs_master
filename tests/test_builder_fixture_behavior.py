@@ -400,6 +400,64 @@ def test_diff_update_converges_and_updates_flags(tmp_path: Path):
 
 
 @pytest.mark.light
+def test_diff_update_resets_stale_chart_scope_flags_for_ignored_music(tmp_path: Path):
+    """差分更新で処理対象外になった曲の譜面スコープフラグが残留しないことを確認する。"""
+    sqlite_path = tmp_path / "stale_chart_scope_flags.sqlite"
+    titletbl = {"song": _make_title_row(title="Song")}
+    datatbl = {"song": _make_data_row()}
+
+    build_or_update_sqlite(
+        sqlite_path=str(sqlite_path),
+        titletbl=titletbl,
+        datatbl=datatbl,
+        actbl={
+            "song": _make_act_row(
+                flags_hex="03",
+                default_option_hex="4",
+            )
+        },
+        schema_version="33",
+        manual_alias_csv_path=None,
+    )
+
+    conn = sqlite3.connect(str(sqlite_path))
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM chart WHERE is_ac_active = 1;"
+        ).fetchone()[0] == len(CHART_TYPES)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM chart WHERE is_inf_active = 1;"
+        ).fetchone()[0] == len(CHART_TYPES)
+    finally:
+        conn.close()
+
+    result = build_or_update_sqlite(
+        sqlite_path=str(sqlite_path),
+        titletbl=titletbl,
+        datatbl=datatbl,
+        actbl={},
+        schema_version="33",
+        manual_alias_csv_path=None,
+    )
+    assert result["ignored"] == 1
+
+    conn = sqlite3.connect(str(sqlite_path))
+    try:
+        assert conn.execute(
+            "SELECT is_ac_active, is_inf_active FROM music WHERE textage_id = 'song';"
+        ).fetchone() == (0, 0)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM chart WHERE is_ac_active = 1 OR is_inf_active = 1;"
+        ).fetchone()[0] == 0
+        # is_active は譜面自体の履歴を保持し、スコープ収録フラグだけを失効させる。
+        assert conn.execute(
+            "SELECT COUNT(*) FROM chart WHERE is_active = 1;"
+        ).fetchone()[0] == len(CHART_TYPES)
+    finally:
+        conn.close()
+
+
+@pytest.mark.light
 def test_build_sets_chart_scope_flags_from_song_flags_and_chart_options(tmp_path: Path):
     """AC/INF 譜面収録フラグが actbl の曲/譜面フラグから算出されることを確認する。"""
     sqlite_path = tmp_path / "chart_scope_flags.sqlite"
