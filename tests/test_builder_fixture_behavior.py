@@ -412,7 +412,7 @@ def test_diff_update_resets_stale_chart_scope_flags_for_ignored_music(tmp_path: 
         datatbl=datatbl,
         actbl={
             "song": _make_act_row(
-                flags_hex="03",
+                flags_hex="0F",
                 default_option_hex="4",
             )
         },
