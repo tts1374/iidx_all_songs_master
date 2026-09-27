@@ -21,6 +21,7 @@ import yaml
 from src.build_validation import (
     build_latest_manifest,
     file_sha256,
+    should_create_release,
     validate_chart_id_stability,
     validate_db_schema_and_data,
     validate_latest_manifest,
@@ -355,6 +356,8 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                     missing_policy=chart_id_missing_policy,
                 )
 
+            release_needed = should_create_release(previous_sqlite_path, sqlite_path)
+
         manifest = build_latest_manifest(
             sqlite_path=sqlite_path,
             schema_version=schema_version,
@@ -365,7 +368,7 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
         validate_latest_manifest(latest_json_path, sqlite_path)
 
         published_release = None
-        if upload_to_release:
+        if upload_to_release and release_needed:
             if token is None:
                 raise RuntimeError(
                     "github.upload_to_release=true requires GITHUB_TOKEN"
@@ -376,6 +379,8 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
                 file_paths=[sqlite_path, latest_json_path],
                 generated_at=manifest.get("generated_at"),
             )
+        elif upload_to_release:
+            print("SKIPPED: no release-worthy music/chart changes")
 
         if discord_webhook:
             msg_lines = [

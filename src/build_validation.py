@@ -504,3 +504,66 @@ def validate_chart_id_stability(
         "missing_in_new_total": len(missing_in_new),
         "missing_policy": missing_policy,
     }
+
+
+def _load_release_keys(sqlite_path: str) -> tuple[dict, dict]:
+    """Load activity flags by music and chart natural keys."""
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        music = {
+            textage_id: (is_ac_active, is_inf_active)
+            for textage_id, is_ac_active, is_inf_active in conn.execute(
+                "SELECT textage_id, is_ac_active, is_inf_active FROM music"
+            )
+        }
+        chart = {
+            (textage_id, play_style, difficulty): (is_ac_active, is_inf_active)
+            for textage_id, play_style, difficulty, is_ac_active, is_inf_active
+            in conn.execute(
+                """
+                SELECT m.textage_id, c.play_style, c.difficulty,
+                       c.is_ac_active, c.is_inf_active
+                FROM chart c JOIN music m ON m.music_id = c.music_id
+                """
+            )
+        }
+        return music, chart
+    finally:
+        conn.close()
+
+
+def should_create_release(
+    previous_sqlite_path: str | None,
+    new_sqlite_path: str,
+) -> bool:
+    """Decide publication from additions and scoped activity changes only.
+
+    The previous path must refer to the latest published release, not a skipped
+    build. A missing path means there is no comparable published SQLite yet.
+    """
+    if previous_sqlite_path is None:
+        return True
+
+    old_music, old_chart = _load_release_keys(previous_sqlite_path)
+    new_music, new_chart = _load_release_keys(new_sqlite_path)
+
+    for table, old_rows, new_rows in (
+        ("music", old_music, new_music),
+        ("chart", old_chart, new_chart),
+    ):
+        missing = old_rows.keys() - new_rows.keys()
+        if missing:
+            sample = ", ".join(str(key) for key in sorted(missing)[:10])
+            raise RuntimeError(
+                f"new sqlite is missing {table} rows from published release "
+                f"({len(missing)}): {sample}"
+            )
+
+    return any(
+        key not in old_rows or flags != old_rows[key]
+        for old_rows, new_rows in (
+            (old_music, new_music),
+            (old_chart, new_chart),
+        )
+        for key, flags in new_rows.items()
+    )

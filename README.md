@@ -256,7 +256,9 @@ Textage の `titletbl.js` / `datatbl.js` / `actbl.js` を取り込み、IIDX 全
 | 5 | SQLite 更新生成 | `song_master_YYYY-MM-DD.sqlite` |
 | 6 | DB 制約/データ整合性検証 | DB 検証 |
 | 7 | `latest.json` 生成 + 実体突合 | `latest.json` |
-| 8 | `upload_to_release=true` 時に日付タグリリースへアップロード | Releases 資産 |
+| 8 | 最新の公開済み SQLite と比較し、対象変更があれば `upload_to_release=true` 時に日付タグリリースへアップロード | Releases 資産 |
+
+ソースハッシュの一致はビルドを省略する条件です。ビルド後のRelease判定は、`music.textage_id` と `chart.(textage_id, play_style, difficulty)` を基準に、新規行または `is_ac_active` / `is_inf_active` の変更だけを対象とします。公開済みの行が物理削除された場合はエラーとし、比較可能な公開済み SQLite がない初回はRelease対象とします。見送った変更は公開済みSQLiteには反映されず、次回も最新の公開済みReleaseと比較します。
 
 ## 設定（`settings.yaml`）
 

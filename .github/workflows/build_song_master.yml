@@ -350,6 +350,7 @@ jobs:
           import os
           import pathlib
           import yaml
+          from src.build_validation import should_create_release
           from src.discord_notify import send_discord_message
           from src.github_release import publish_files_as_new_date_release
 
@@ -374,6 +375,13 @@ jobs:
           sqlite_path = output_dir / sqlite_name
           if not sqlite_path.exists():
               raise RuntimeError(f"公開失敗: SQLite が存在しません: {sqlite_name}")
+
+          baseline_path = None
+          if os.environ.get("BASELINE_BOOTSTRAP") != "1":
+              baseline_path = os.environ["BASELINE_SQLITE_PATH"]
+          if not should_create_release(baseline_path, str(sqlite_path)):
+              print("skip publish: no release-worthy music/chart changes")
+              raise SystemExit(0)
 
           release_notes = "\n".join(
               [
