@@ -112,6 +112,39 @@ def _fill_sparse_array_elements(js_text: str, replacement: str = "0") -> str:
     return "".join(out)
 
 
+def _strip_js_trailing_commas(js_text: str) -> str:
+    """Remove object/array trailing commas without changing string literals."""
+    out: list[str] = []
+    in_str = False
+    escaped = False
+    str_char = ""
+
+    for index, ch in enumerate(js_text):
+        if in_str:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == str_char:
+                in_str = False
+            continue
+
+        if ch in ('"', "'"):
+            in_str = True
+            str_char = ch
+        elif ch == ",":
+            next_index = index + 1
+            while next_index < len(js_text) and js_text[next_index].isspace():
+                next_index += 1
+            if next_index < len(js_text) and js_text[next_index] in "}]":
+                continue
+
+        out.append(ch)
+
+    return "".join(out)
+
+
 # pylint: disable-next=too-many-locals,too-many-branches,too-many-statements
 def _extract_js_object(js_text: str, varname: str) -> dict:
     """
@@ -125,6 +158,7 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
     - Strip `.fontcolor(...)` decorations.
     - Convert single-quoted object keys to JSON-compatible double quotes.
     - Convert actbl's bare A-F tokens into quoted strings.
+    - Strip object/array trailing commas after filling sparse array elements.
     """
     match = re.search(rf"{varname}\s*=\s*\{{", js_text)
     if not match:
@@ -196,6 +230,7 @@ def _extract_js_object(js_text: str, varname: str) -> dict:
     obj_text = re.sub(r"(?<=,)([A-F])(?=,)", r'"\1"', obj_text)
     obj_text = re.sub(r"(?<=\[)([A-F])(?=,)", r'"\1"', obj_text)
     obj_text = re.sub(r"(?<=,)([A-F])(?=\])", r'"\1"', obj_text)
+    obj_text = _strip_js_trailing_commas(obj_text)
 
     def _escape_ctrl(match_obj: re.Match[str]) -> str:
         """Escape raw control characters inside JSON-like string literals."""
