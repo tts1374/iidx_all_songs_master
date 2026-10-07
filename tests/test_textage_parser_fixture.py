@@ -47,18 +47,41 @@ def test_extract_js_object_with_minimal_datatbl_and_actbl():
 
 
 @pytest.mark.light
+@pytest.mark.parametrize(
+    "js, expected",
+    [
+        ('datatbl={"k1":[0,1,2],};', {"k1": [0, 1, 2]}),
+        ('datatbl={"k1":[0,1,2],\n//"k2":[3,4,5]\n};', {"k1": [0, 1, 2]}),
+        ('datatbl={"k1":[0,1,2, /* comment */ ],};', {"k1": [0, 1, 2]}),
+        ('datatbl={"k1":[1,,],"k2":[,,],};', {"k1": [1, 0], "k2": [0, 0]}),
+        ('datatbl={"k1":["literal ,} and ,]",],};', {"k1": ["literal ,} and ,]"]}),
+        (
+            r'datatbl={"k1":["escaped \" quote ,}",],};',
+            {"k1": ['escaped " quote ,}']},
+        ),
+        ('datatbl={"k1":{"nested":[1,],},};', {"k1": {"nested": [1]}}),
+    ],
+)
+def test_extract_js_object_handles_trailing_commas(js, expected):
+    """JS trailing commas, including those left by comments, are accepted."""
+    assert _extract_js_object(js, "datatbl") == expected
+
+
+@pytest.mark.light
 def test_extract_js_object_with_actbl_constant_flag_keeps_positive_value():
     """actbl constants must keep numeric sign (e.g., F=15 -> 15)."""
     js = """
     F=15;
     actbl={
-      "k1":[F,0,0,A,7,B]
+      "k1":[F,0,0,A,7,B,],
+      "single":[A,],
     };
     """
     parsed = _extract_js_object(js, "actbl")
     assert parsed["k1"][0] == 15
     assert parsed["k1"][3] == "A"
     assert parsed["k1"][5] == "B"
+    assert parsed["single"] == ["A"]
 
 
 @pytest.mark.light

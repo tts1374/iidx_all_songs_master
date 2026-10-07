@@ -306,6 +306,20 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
             source_hashes[INF_PACK_HASH_KEY] = file_sha256(inf_pack_csv_path)
 
             if has_same_textage_source_hashes(previous_source_hashes, source_hashes):
+                # Keep artifacts available for full tests and score import validation.
+                shutil.copyfile(previous_sqlite_path, sqlite_path)
+                validate_db_schema_and_data(
+                    sqlite_path,
+                    expected_schema_version=schema_version,
+                )
+                manifest = build_latest_manifest(
+                    sqlite_path=sqlite_path,
+                    schema_version=schema_version,
+                    generated_at=generated_at,
+                    source_hashes=source_hashes,
+                )
+                write_latest_manifest(latest_json_path, manifest)
+                validate_latest_manifest(latest_json_path, sqlite_path)
                 if discord_webhook:
                     send_discord_message(
                         discord_webhook,
